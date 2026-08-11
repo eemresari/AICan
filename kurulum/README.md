@@ -111,6 +111,25 @@ ses dosyaları da beraberinde gelmiş olur.)
 
 Soru sormadan kurmak için: `KUR.bat --sessiz` (profil karttan seçilir, otomatik=evet).
 
+### Model indirmesi takılırsa — kurulumu bloke etmesin
+
+`gemma4:26b` 18 GB; sallanan bir ağda `ollama pull` **geri sarar** (inen GB artıp
+azalır). Sebep: Ollama 4 paralel akış kullanıyor, biri kopunca o parçayı baştan
+alıyor. İnen parçalar diskte kalır, sıfırdan başlamaz.
+
+```powershell
+kurulum\MODEL_INDIR.bat            # akışı 1'e indirir, kesilirse kaldığı yerden tekrar dener
+kurulum\MODEL_INDIR.bat gemma4:12b # daha küçük model (7,6 GB)
+```
+
+> Ayarın sunucu tarafında geçerli olması için Ollama'yı **sistem tepsisinden
+> Quit** edip yeniden açman gerekebilir.
+
+**Önemli:** Sergi `test_mode: true` ile açıldığı için **LLM kullanılmıyor.**
+Model inmeden de Whisper, oyunlar ve sesler tam çalışır — indirmeyi sonraya
+bırakıp kurulumun geri kalanını bitirebilirsin. Model sonradan indiğinde
+`BASLAT.bat` onu açılışta VRAM'e yükler.
+
 ---
 
 ## C) Elden taşınması gereken TEK şey: ses önbelleği
@@ -168,7 +187,8 @@ gecikme), anahtar da yoksa ücretsiz edge/Piper sesine düşer.
 | **`CUBLAS_STATUS_NOT_SUPPORTED`** | RTX 50 serisinde INT8 → `config.json`'da `whisper_compute_type` **float16** olmalı; `pip install -U "ctranslate2>=4.6.3,<5"` |
 | **Cevaplar 10 kat yavaş, `size_vram=0`** | Ollama kartı tanımamış → `winget upgrade -e --id Ollama.Ollama` + NVIDIA sürücüsünü güncelle |
 | Sağlık kontrolü "modelin %X'i GPU'da" diyor | Model karta sığmıyor → daha küçük model (`gemma4:12b`) ya da `num_ctx` düşür |
-| Model inmiyor | İnterneti kontrol et; `ollama pull <model>` elle dene |
+| **İnen GB sürekli artıp azalıyor** | Ollama 4 paralel akış kullanıyor, biri kopunca o parça baştan alınıyor → `kurulum\MODEL_INDIR.bat` (akışı 1'e indirir + kaldığı yerden tekrar dener) |
+| Model inmiyor | İnterneti kontrol et; `MODEL_INDIR.bat` dene; olmazsa `ollama pull <model>` elle |
 | Ses yok | Tarayıcıda sayfaya bir kez tıkla; `s` tuşu ses kapalı olabilir; sağlık kontrolüne bak |
 | Sesler robot gibi / farklı | TTS cache taşınmamış → C bölümü |
 | Mikrofon çalışmıyor | Tarayıcı adres çubuğu → mikrofon izni; Windows ayarları → gizlilik → mikrofon |
