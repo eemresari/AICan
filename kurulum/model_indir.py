@@ -72,6 +72,47 @@ def disk_bos_gb() -> float:
         return -1.0
 
 
+def _profil_uyusmazligi(model: str) -> bool:
+    """config.json bu makineye AIT MI? Degilse indirmeyi durdur.
+
+    Gercek vaka (sergi PC'si, 2026-08-11): kullanici bu betigi calistirdi ve
+    18 GB'lik gemma4:26b yerine 2,6 GB'lik qwen3:4b inmeye basladi. Sebep,
+    config.json'in hala LAPTOP profili olmasiydi — KUR.bat'in profil adimi ya
+    hic kosmamis ya da kart taninmadigi icin 'laptop' onerip oylece kabul
+    edilmisti.
+
+    Bu yalniz yanlis model demek degil: ayni dosya whisper_compute_type'i da
+    veriyor ve laptop profili int8_float16 istiyor — RTX 50 serisinde CALISMAZ.
+    Yani yanlis modeli indirmek, arkasinda cok daha buyuk bir yanlis kurulumun
+    habercisi. Sessizce indirmek yerine burada durup soyluyoruz."""
+    gpu = donanim.birincil_gpu()
+    if gpu is None:
+        return False
+    onerilen = donanim.profil_oner(gpu, ORCH)
+    beklenen_dosya = ORCH / donanim.PROFILLER[onerilen][0]
+    if beklenen_dosya.name == "config.json" or not beklenen_dosya.is_file():
+        return False
+    try:
+        beklenen_model = json.loads(
+            beklenen_dosya.read_text(encoding="utf-8-sig"))["ollama_model"]
+    except Exception:  # noqa: BLE001
+        return False
+    if beklenen_model == model:
+        return False
+    print(f"\n  !! DUR — config.json bu makineye ait gorunmuyor.")
+    print(f"     kart          : {gpu.ad} ({gpu.vram_gb:.0f} GB)")
+    print(f"     onerilen profil: {onerilen}  ->  {beklenen_model}")
+    print(f"     config.json'da : {model}")
+    print(f"\n     Profil adimi uygulanmamis. Yanlis modeli indirmeden once duzelt —")
+    print(f"     ayni dosya Whisper ayarini da veriyor ve yanlis profil RTX 50")
+    print(f"     serisinde int8 isteyip ses tanimayi CPU'ya dusurur.\n")
+    print(f"     Duzeltme:")
+    print(f"       copy \"{beklenen_dosya}\" \"{ORCH / 'config.json'}\"")
+    print(f"     Sonra bu betigi tekrar calistir.")
+    print(f"     (Yine de bu modeli indirmek istiyorsan: MODEL_INDIR.bat {model})\n")
+    return True
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description="Dayanikli Ollama model indirme")
     p.add_argument("model", nargs="?", help="model etiketi (bos: config.json'dan)")
@@ -86,6 +127,9 @@ def main() -> int:
             model = json.loads((ORCH / "config.json").read_text(encoding="utf-8-sig"))["ollama_model"]
         except Exception as e:  # noqa: BLE001
             return int(bool(print(f"HATA: config.json'dan model okunamadi: {e}")))
+        print(f"  (model config.json'dan okundu: {model})")
+        if _profil_uyusmazligi(model):
+            return 1
 
     yol = ollama_yolu()
     if yol is None:
