@@ -72,6 +72,7 @@
   "web_open_control": false,
   "web_kiosk_browser": true,
   "web_fullscreen": true,
-  "_test_mode_notu": "Sergi acilisinda KAPALI olmali (tam deneyim). Saha testinde ekranda 'g' tusu acar/kapar ve bu dosyaya degil config.json'a yazar. Eski sergi profilinde bu anahtar hic yoktu; varsayilan zaten false ama acikca yazmak 'acaba acik mi kaldi' sorusunu bitiriyor.",
-  "test_mode": false
+  "_test_mode_notu": "SERGIDE ACIK KULLANILIYOR (kullanici karari, 2026-08-11): menude yalnizca Es/Zit Anlam + Atasozu, sohbet KAPALI, 'merhaba' dogrudan oyun menusunu acar. Ekranda 'g' tusu acip kapar ve config.json'a kalici yazar — sergi acilisinda ACIK basladigindan emin ol. Eski sergi profilinde bu anahtar hic yoktu (varsayilan false); burada acikca yaziyoruz.",
+  "_test_mode_sonucu": "DIKKAT: test modu acikken LLM HIC KULLANILMIYOR. /api/send sohbeti bridge.request'e gitmeden geri doner; kelime oyunu (tek word_llm kullanicisi) izinli_oyunlar disinda kaldigi icin erisilemez. Yani ollama_model sadece test modu KAPATILDIGINDA devreye girer. Bu kurulumda kritik yol STT'dir -> whisper large-v3 + float16 + beam_size 5.",
+  "test_mode": true
 }
