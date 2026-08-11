@@ -33,7 +33,7 @@ try:
 except Exception:  # noqa: BLE001
     pass
 
-from game_engine import GameEngine, _JEST, _TXT, _cap        # noqa: E402
+from game_engine import GameEngine, _JEST, _TXT, _cap, _load_json_list   # noqa: E402
 from word_llm import son_harf                                 # noqa: E402
 from web_server import (                                      # noqa: E402
     _split_sentences_tr, KELIME_KURAL_TEXT, HAZIR_BEKLE_TEXT,
@@ -41,6 +41,7 @@ from web_server import (                                      # noqa: E402
     TEST_OYUNLAR, TEST_SOHBET_KAPALI_TEXT, _test_greeting_yanit,
 )
 from tts.engine_elevenlabs import emotion_signature           # noqa: E402
+from tts.text_norm import seslendirme_metni                   # noqa: E402
 
 _SEN_BASLA = "Sen başla — bir kelime söyle!"
 
@@ -128,6 +129,22 @@ def build_units(ge):
             [prov.intro(ge.QUIZ_QUESTION_COUNT) +
              " Hazırsan başlayalım — 'başla' de ya da butona dokun!"],
             _JEST["kel_intro"], 0.8)
+    # Quiz hazirlik repliklerinin VOICE_ONLY (kiosk/test modu) varyantlari: "ya da
+    # butona dokun" yok -> FARKLI metin, FARKLI cache anahtari. Batch varsayilani
+    # voice_only=False oldugu icin bunlar yalnizca web_server on-isitmasiyla
+    # cache'lenirdi; anahtar yokken on-isitma edge'e duser ve (cache zehirlenme
+    # korumasi geregi) YAZILMAZ -> sergide surekli ucretsiz ses. Dogrudan uret.
+    eski_vo, eski_prov, eski_phase = ge.voice_only, ge.quiz_provider, ge.phase
+    ge.voice_only = True
+    vo_intro, vo_bekle = [], []
+    for key in ge._providers:
+        ge.quiz_provider = key
+        vo_intro.append(ge._start_quiz()["yanit"])
+        vo_bekle.append(ge._handle_quiz_ready("hmm")["yanit"])
+    ge.voice_only, ge.quiz_provider, ge.phase = eski_vo, eski_prov, eski_phase
+    ge.quiz_turn = None
+    add("quiz_intro_voice", vo_intro, _JEST["kel_intro"], 0.8)
+    add("quiz_bekle_voice", list(dict.fromkeys(vo_bekle)), ["bekle"], 0.6)
 
     # 2) Kazanma (AI pes) + tekrar-uyari replikleri — ARTIK harfsiz -> harf-basi
     # genisletme yok, dogrudan on-uretilir (Mert sesiyle cache'te olsun).
@@ -171,6 +188,34 @@ def build_units(ge):
     return U
 
 
+AI_DIR = Path(__file__).resolve().parent.parent.parent / "ai"
+
+
+def veri_kombinasyonlari():
+    """(etiket, GameEngine) — AKTIF veri + ai/ altindaki TUM soru seti varyantlari.
+
+    Sergi PC'sinin deposu farkli bir surumde olabilir: kod 2026-08-01'de kucuk
+    'cocuklar icin' setlerine gecti, ondan onceki checkout hala buyuk havuzu
+    (es_zit_anlam.json + atasozu.json) okur. Yalnizca aktif seti uretirsek o
+    makinede sorular — ozellikle OYUN SONU baglamindaki son cevap — sesi olmayan
+    metne duser. Varyantlari da kapsamak, hangi surum acilirsa acilsin Mert
+    sesini garantiler."""
+    yield "aktif", GameEngine(bridge=None)
+    for ea in sorted(AI_DIR.glob("es_zit*.json")):
+        for ata in sorted(AI_DIR.glob("atasozu*.json")):
+            yield (f"{ea.name} + {ata.name}",
+                   GameEngine(bridge=None, ea_path=ea, atasozu_data=_load_json_list(ata)))
+
+
+def build_units_tum_veri():
+    """Tum veri varyantlarinin birimleri arka arkaya. Ayni anahtar birden fazla
+    varyantta cikarsa cagiran taraf (unit_key_map + gorulen kumesi) tekillestirir."""
+    U = []
+    for _, ge in veri_kombinasyonlari():
+        U.extend(build_units(ge))
+    return U
+
+
 def unit_key_map(unit):
     """{(chunk, imza, yog): (chunk, temsili_jest, yog)} — TUM pool jest'leri enumere
     edilir, imza benzer olanlari tek anahtara indirir (= gercek runtime maliyeti);
@@ -178,6 +223,11 @@ def unit_key_map(unit):
     m = {}
     for text in unit["texts"]:
         for chunk in _split_sentences_tr(text):
+            # runtime (_tts_synth_cached) ile AYNI temizlik — aksi halde emoji/":)"
+            # iceren parcalarin anahtari tutmaz ve sergide ucretsiz sese duser.
+            chunk = seslendirme_metni(chunk)
+            if not chunk:
+                continue
             for j in unit["jests"]:
                 key = (chunk, emotion_signature(j, unit["yog"]), unit["yog"])
                 if key not in m:
@@ -212,18 +262,79 @@ def _print_cat(title, cat, cpc):
     return n_chunks, n_chars
 
 
+def _open_cache(cfg):
+    """(cache, voice) — API'siz; denetim ve uretim AYNI anahtar uzayini kullansin."""
+    from tts.cache import WavCache
+    voice = cfg.get("tts_voice", DEFAULT_TTS_VOICE)
+    cache = WavCache(Path(__file__).resolve().parent / "cache",
+                     max_files=int(cfg.get("tts_cache_max", 5000)), enabled=True)
+    return cache, voice
+
+
+def audit(units, cache, voice, cpc, ornek=10):
+    """API'siz DENETIM: hangi birimlerin hangi parcalari cache'te YOK?
+
+    Cache'te olmayan her parca sergide canli sentezlenir; ElevenLabs anahtari
+    yoksa/kota dolmussa ucretsiz edge sesiyle duyulur. Bu rapor tam olarak o
+    listedir (= --run --yes ile uretilecek kume)."""
+    print(f"\n=== ONBELLEK DENETIMI (ses={voice}) ===\n")
+    print(f"  {'birim':22} {'anahtar':>8} {'cache':>8} {'EKSIK':>8}   eksik-metin")
+    eksikler, sayac, gorulen = defaultdict(list), defaultdict(lambda: [0, 0, 0]), set()
+    for u in units:
+        for key in unit_key_map(u):
+            if key in gorulen:
+                continue
+            gorulen.add(key)
+            chunk, sig, yog = key
+            sayac[u["name"]][0] += 1
+            if cache.get(cache.make_key(chunk, sig, yog, voice)) is not None:
+                sayac[u["name"]][1] += 1
+            else:
+                sayac[u["name"]][2] += 1
+                eksikler[u["name"]].append(chunk)
+    for name in sorted(sayac, key=lambda n: -sayac[n][2]):
+        t, h, m = sayac[name]
+        print(f"  {name:22} {t:8} {h:8} {m:8}   {len(set(eksikler.get(name, [])))}")
+    for name in sorted(eksikler, key=lambda n: -len(set(eksikler[n]))):
+        benzersiz = sorted(set(eksikler[name]))
+        kar = sum(len(p) for p in eksikler[name])
+        print(f"\n  [{name}] eksik benzersiz metin: {len(benzersiz)}  "
+              f"({kar} karakter ≈ {kar * cpc:,.0f} kredi)")
+        for p in benzersiz[:ornek]:
+            print(f"      - {p[:88]}")
+        if len(benzersiz) > ornek:
+            print(f"      ... (+{len(benzersiz) - ornek} benzersiz metin daha)")
+    n_eksik = sum(v[2] for v in sayac.values())
+    kar_top = sum(len(p) for v in eksikler.values() for p in v)
+    print(f"\n  TOPLAM: {len(gorulen)} anahtar | cache'te {len(gorulen) - n_eksik} | "
+          f"EKSIK {n_eksik} ({kar_top} karakter ≈ {kar_top * cpc:,.0f} kredi)")
+    print("\n  Eksikleri uret: python -m tts.gen_batch_elevenlabs --run --yes\n")
+    return eksikler
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--run", action="store_true", help="Gercekten sentezle (API + kredi)")
     ap.add_argument("--yes", action="store_true", help="--run icin onay")
+    ap.add_argument("--eksik", action="store_true",
+                    help="API'siz DENETIM: cache'te olmayan (= ucretsiz sese dusen) parcalari listele")
     ap.add_argument("--include-selfheal", action="store_true",
                     help="self_heal birimleri (harf sablonlari) de uret")
+    ap.add_argument("--tum-veri", action="store_true",
+                    help="ai/ altindaki TUM soru seti varyantlarini kapsa "
+                         "(sergi PC farkli surumdeyse de ses hazir olsun)")
     args = ap.parse_args()
 
     ge = GameEngine(bridge=None)
-    units = build_units(ge)
+    units = build_units_tum_veri() if args.tum_veri else build_units(ge)
     model = "eleven_flash_v2_5"
     cpc = 0.5 if ("flash" in model or "turbo" in model) else 1.0
+
+    if args.eksik:
+        cache, voice = _open_cache(load_config())
+        audit([u for u in units if not u["self_heal"] or args.include_selfheal],
+              cache, voice, cpc)
+        return
 
     print(f"\n=== ElevenLabs on-uretim ONIZLEME (imza-kanonik, model={model}, "
           f"{cpc} kredi/karakter) ===\n")
@@ -243,16 +354,13 @@ def main():
 
     # ——— GERCEK URETIM ———
     import os
-    from tts.cache import WavCache
     from tts.engine_elevenlabs import ElevenLabsEngine
     cfg = load_config()
-    voice = cfg.get("tts_voice", DEFAULT_TTS_VOICE)
     api_key = cfg.get("tts_elevenlabs_api_key") or os.environ.get("ELEVENLABS_API_KEY", "")
     if not api_key:
         print("HATA: ELEVENLABS_API_KEY yok (env ya da config). Iptal.\n")
         return
-    cache = WavCache(Path(__file__).resolve().parent / "cache",
-                     max_files=int(cfg.get("tts_cache_max", 5000)), enabled=True)
+    cache, voice = _open_cache(cfg)
     # Batch BILINCLI tek-seferlik harcama (dry-run + --yes ile onaylandi) -> runtime
     # tavanina (cap) TAKILMASIN: cap=0 (guard kapali) ama harcama ayni usage dosyasina
     # yazilir; boylece runtime motoru (cap'li) ayni ayda bu harcamayi gorur.

@@ -58,5 +58,9 @@ orchestrator/tts/*.rar
 # 60MB ses modeli — README'deki komutla indirilir
 orchestrator/tts/voices/*.onnx
 orchestrator/tts/voices/*.onnx.json
+# sergi PC'ye elden tasinacak paket (tts/paket_hazirla.py uretir, ~450MB)
+orchestrator/tts/sergi_paketi/
+# batch uretim gunlukleri
+orchestrator/tts/batch_run*.log
 # kalite testi ciktilari
 seslendirme_demo/

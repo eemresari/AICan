@@ -44,7 +44,7 @@
   "tts_fallback_voice": "tr_TR-dfki-medium",
   "tts_pitch_enabled": true,
   "tts_cache_enabled": true,
-  "tts_cache_max": 8000,
+  "tts_cache_max": 20000,
   "tts_autoplay": true,
   "tts_elevenlabs_api_key": "",
   "tts_elevenlabs_model": "eleven_flash_v2_5",
