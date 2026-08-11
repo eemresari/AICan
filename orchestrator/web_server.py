@@ -38,8 +38,37 @@ logging.basicConfig(
 log = logging.getLogger("web_server")
 
 BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "config.json"
 ROOT_DIR = BASE_DIR.parent
+
+
+def _config_yolu() -> Path:
+    """Hangi config dosyasi? AICAN_CONFIG verilmisse o, yoksa config.json.
+
+    config.sergi*.json dosyalarinin aciklama satirlari bu ortam degiskenini
+    yillardir tarif ediyordu ama KOD OKUMUYORDU: profil secmek icin
+    AICAN_CONFIG ayarlayan biri sessizce LAPTOP profiliyle calisiyordu.
+    Yeni sergi PC'sinde bunun bedeli buyuk — laptop profili int8_float16
+    ister, RTX 5090 (sm_120) INT8 desteklemez, sistem CPU'ya duser ve
+    "calisiyor ama yavas" halde sergiye cikardi. Simdi gercekten okunuyor.
+
+    Yol goreli verilirse once proje kokune, sonra orchestrator/ altina
+    bakilir (belge 'orchestrator/config.sergi.json' diyor, kisa hali de
+    'config.sergi.json' calissin). Dosya YOKSA sessizce config.json'a
+    dusmek ayni tuzagi kurar -> gurultulu uyari basip devam ederiz."""
+    ham = os.environ.get("AICAN_CONFIG", "").strip()
+    varsayilan = BASE_DIR / "config.json"
+    if not ham:
+        return varsayilan
+    aday = Path(ham)
+    for p in ([aday] if aday.is_absolute() else [ROOT_DIR / aday, BASE_DIR / aday]):
+        if p.is_file():
+            return p
+    log.warning("AICAN_CONFIG='%s' bulunamadi — config.json kullaniliyor. "
+                "Profil BEKLEDIGINIZ GIBI OLMAYABILIR.", ham)
+    return varsayilan
+
+
+CONFIG_PATH = _config_yolu()
 WEB_DIR = ROOT_DIR / "web"
 ASSETS_DIR = ROOT_DIR / "assets"
 EMOJI_BASE_DIR = ASSETS_DIR / "emojis"
@@ -360,6 +389,14 @@ def _load_whisper_async(state: WhisperState, model_size: str,
         _add_cuda_dll_dirs()
     attempts = [(device, compute_type)]
     if device != "cpu":
+        # ARA BASAMAK — GPU'yu birakmadan once float16'yi dene.
+        # Blackwell (RTX 50xx / sm_120): CTranslate2 4.6.2 INT8'i bu mimaride
+        # kapatti; int8 / int8_float16 CUBLAS_STATUS_NOT_SUPPORTED ile coker.
+        # Bu satir olmadan yanlis config'li bir 5090 dogrudan CPU'ya duser ve
+        # sergi "calisiyor ama STT 3-4 sn" halinde sessizce yavaslar. float16
+        # her CUDA kartinda gecerli, dolayisiyla eski sergi PC'sinde de zararsiz.
+        if "int8" in compute_type:
+            attempts.append((device, "float16"))
         attempts.append(("cpu", "int8"))
     for dev, ct in attempts:
         try:
@@ -430,6 +467,29 @@ def _probe_edge_or_pin_fallback(engine):
 # mantik olmali — on-isitma anahtarlari frontend parcalariyla eslessin.
 _SENT_SPLIT_RE = re.compile(r"(?<=[.!?…])\s+")
 
+_SESSIZ_WAV = None
+
+
+def _sessiz_wav() -> bytes:
+    """20 ms sessizlik (22050 Hz mono 16-bit).
+
+    Sadece emoji/isaretten olusan bir parca normalize edilince BOSALIR (bkz
+    tts/text_norm). Hata donersek istemci kalan parcalari da birakir
+    (app.js speak(): `if (!url) return;`) -> cumlenin geri kalani susardi.
+    Sessiz WAV ile o parca atlanir, akis devam eder."""
+    global _SESSIZ_WAV
+    if _SESSIZ_WAV is None:
+        import io
+        import wave
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(22050)
+            w.writeframes(b"\x00" * (2 * 441))
+        _SESSIZ_WAV = buf.getvalue()
+    return _SESSIZ_WAV
+
 
 def _split_sentences_tr(text: str, min_len: int = 10) -> list:
     """Metni cumle parcalarina boler; kisa parca (<min_len) sonrakiyle birlesir,
@@ -464,6 +524,13 @@ def _tts_synth_cached(state: "TTSState", cache, config: dict, text: str,
                       jest_id=None, yogunluk: float = 0.7):
     """Onbellek anahtari turetimi + sentez — api_speak ve on-isitma AYNI yolu
     kullanir (varsayilanlar api_speak ile ayni: jest_id=None, yogunluk=0.7)."""
+    # SES metni != EKRAN metni: emoji/":)"/"Es/Zit" sese girmeden temizlenir
+    # (bkz tts/text_norm.py). Anahtar TEMIZLENMIS metinden turetilir ki
+    # on-uretim (gen_batch_elevenlabs) ile birebir ayni anahtar cikssin.
+    from tts.text_norm import seslendirme_metni
+    text = seslendirme_metni(text)
+    if not text:
+        return b""       # yalnizca emoji/isaretten ibaret parca — seslendirilecek sey yok
     voice = config.get("tts_voice", DEFAULT_TTS_VOICE)
     key = cache.make_key(text, _cache_jest(state.engine, jest_id, yogunluk), yogunluk, voice)
     audio = cache.get(key)
@@ -1328,6 +1395,12 @@ def create_app(config: dict) -> Flask:
                 "status": tts_state.status,
                 "detail": tts_state.error,
             }), 503
+        # Seslendirilecek sey kalmadiysa (yalnizca emoji/isaret) sessizlik don —
+        # hata donmek cumlenin KALAN parcalarini da susturur (bkz _sessiz_wav).
+        from tts.text_norm import seslendirme_metni
+        if not seslendirme_metni(text):
+            return Response(_sessiz_wav(), mimetype="audio/wav",
+                            headers={"Cache-Control": "no-store"})
 
         # Anahtar turetimi + sentez ortak yardimcida — on-isitma da AYNI yolu kullanir.
         try:

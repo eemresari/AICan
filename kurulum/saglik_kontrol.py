@@ -15,6 +15,9 @@ import socket
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import donanim  # noqa: E402 — kur.py ile ortak donanım/profil mantığı
+
 BURASI = Path(__file__).resolve().parent
 ROOT = BURASI.parent
 ORCH = ROOT / "orchestrator"
@@ -63,6 +66,44 @@ def kontrol_vcredist() -> None:
     except OSError:
         yaz("HATA", "VC++ Redistributable eksik — Whisper ve Piper açılmaz. "
                     "Kur: https://aka.ms/vs/17/release/vc_redist.x64.exe")
+
+
+def kontrol_gpu(cfg: dict | None = None):
+    """Ekran kartı, sürücü ve config'in GPU varsayımları.
+
+    Yeni sergi PC'sinin (RTX 5090 / Blackwell) en olası sessiz arızası:
+    yanlış profil kopyalanınca Whisper INT8 ister, sm_120 desteklemez, sistem
+    CPU'ya düşer ve 'çalışıyor ama yavaş' hâlde sergiye çıkar. Burada yakala."""
+    gpu = donanim.birincil_gpu()
+    if gpu is None:
+        yaz("UYARI", "NVIDIA kartı görünmüyor (nvidia-smi yok/sürücü kurulu değil) — "
+                     "LLM ve ses tanıma CPU'da çok yavaş çalışır")
+        return None
+    yaz("PASS", f"GPU: {gpu}")
+    uyari = donanim.surucu_uyarisi(gpu)
+    if uyari:
+        yaz("HATA", uyari)
+    if gpu.blackwell:
+        # Blackwell'de INT8 kapalı (CTranslate2 4.6.2) ve CUDA 12.8 (4.6.3) şart.
+        try:
+            import importlib.metadata as md
+            s = md.version("ctranslate2")
+            parcalar = tuple(int(x) for x in s.split(".")[:3] if x.isdigit())
+            if parcalar >= (4, 6, 3):
+                yaz("PASS", f"ctranslate2 {s} (Blackwell/CUDA 12.8 destekli)")
+            else:
+                yaz("HATA", f"ctranslate2 {s} — RTX 50 serisi için 4.6.3+ gerekli "
+                            f"(CUDA 12.8). Güncelle: pip install -U 'ctranslate2>=4.6.3,<5'")
+        except Exception as e:  # noqa: BLE001
+            yaz("UYARI", f"ctranslate2 sürümü okunamadı ({e})")
+    if cfg:
+        for u in donanim.config_uyumu(gpu, cfg):
+            yaz("HATA", u)
+        agirlik = donanim.model_vram_ihtiyaci(str(cfg.get("ollama_model", "")))
+        if agirlik and agirlik + 5 > gpu.vram_gb:
+            yaz("UYARI", f"model ~{agirlik:.0f} GB + Whisper, {gpu.vram_gb:.0f} GB VRAM'e "
+                         f"zor sığar — katmanlar CPU'ya taşabilir (yavaş cevap)")
+    return gpu
 
 
 def kontrol_ffmpeg() -> None:
@@ -174,6 +215,34 @@ def kontrol_tts_cache(cfg: dict) -> None:
         yaz("UYARI", "ELEVENLABS_API_KEY yok — cache'te olmayan replikler edge/piper sesiyle çalar")
 
 
+def kontrol_ollama_gpu(url: str, model: str) -> None:
+    """Yüklü model GPU'da mı, CPU'da mı?
+
+    Ollama yeni bir kartı tanıyamazsa HATA VERMEDEN CPU'ya düşer: model
+    çalışır, cevaplar 10 kat yavaşlar. /api/ps'teki size_vram bunu tek
+    bakışta söyler. Model o an yüklü değilse (keep_alive dolmuş) sessiz geç —
+    BASLAT.bat açılışta warmup yapıyor, sergi anında yüklü olur."""
+    import requests
+    try:
+        yuklu = requests.get(f"{url}/api/ps", timeout=5).json().get("models", [])
+    except Exception:  # noqa: BLE001
+        return
+    for m in yuklu:
+        if not str(m.get("name", "")).startswith(model.split(":")[0]):
+            continue
+        vram, toplam = int(m.get("size_vram", 0)), int(m.get("size", 0)) or 1
+        if vram == 0:
+            yaz("HATA", "model CPU'da çalışıyor (size_vram=0) — cevaplar çok yavaş. "
+                        "NVIDIA sürücüsünü ve Ollama'yı güncelleyin "
+                        "(winget upgrade -e --id Ollama.Ollama)")
+        elif vram < toplam * 0.9:
+            yaz("UYARI", f"modelin yalnızca %{100 * vram // toplam}'i GPU'da — "
+                         f"katmanlar CPU'ya taşmış, cevaplar yavaşlar")
+        else:
+            yaz("PASS", f"model GPU'da: {vram / 2**30:.1f} GB")
+        return
+
+
 def kontrol_ollama(cfg: dict) -> None:
     model = cfg.get("ollama_model", "")
     url = cfg.get("ollama_url", "http://localhost:11434")
@@ -186,6 +255,7 @@ def kontrol_ollama(cfg: dict) -> None:
             yaz("PASS", f"model hazır: {model}")
         else:
             yaz("HATA", f"model çekilmemiş: {model} — 'ollama pull {model}' çalıştırın")
+        kontrol_ollama_gpu(url, model)
         return
     except Exception:
         pass
@@ -271,6 +341,7 @@ def main() -> int:
     kontrol_dosyalar()
     kontrol_veri()
     cfg = config_yukle()
+    kontrol_gpu(cfg)
     if cfg:
         kontrol_piper(cfg)
         kontrol_tts_cache(cfg)

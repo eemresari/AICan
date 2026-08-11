@@ -8,9 +8,12 @@ echo.
 echo  ==============================================
 echo    AICAN SERGI KURULUMU  (temiz PC icin)
 echo  ==============================================
-echo  Bu betik: Python + bagimliliklar + Ollama + model
-echo  + Whisper modelini kurar, profili secer, kisayol olusturur
-echo  ve sonunda saglik kontrolu calistirir. Internet gerekir.
+echo  Bu betik: ekran kartini tespit eder, Python + bagimliliklar
+echo  + Ollama + dil modeli + Whisper + cevrimdisi sesi kurar,
+echo  karta uygun profili secer, kisayol olusturur ve sonunda
+echo  saglik kontrolu calistirir. Internet gerekir.
+echo.
+echo  Proje klasoru henuz makinede yoksa once SIFIRDAN_KUR.ps1 kullan.
 echo.
 
 call :bul_python

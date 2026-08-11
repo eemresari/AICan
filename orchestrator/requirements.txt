@@ -11,8 +11,20 @@ noisereduce>=3.0
 # Sistem CUDA Toolkit'i GEREKMEZ — ctranslate2 bu wheel'lardaki
 # cublas64_12.dll / cudnn dll'lerini kullanir (web_server.py yola ekler).
 # Bunlar olmadan model "yuklenir" ama ILK transkripsiyon coker.
-nvidia-cublas-cu12
-nvidia-cudnn-cu12>=9,<10
+#
+# BLACKWELL (RTX 50xx / sm_120 — yeni sergi PC'sinin RTX 5090'i) SART:
+#   * ctranslate2 4.6.3 CUDA 12.8 destegi getirdi; 4.6.3 ALTI surumler
+#     sm_120'yi taniyamaz. 4.6.2 ayrica INT8'i Blackwell'de KAPATTI, cunku
+#     yeni INT8 tensor cekirdekleri farkli padding istiyor -> int8/int8_float16
+#     "CUBLAS_STATUS_NOT_SUPPORTED" ile coker. Bu yuzden 5090 profilinde
+#     whisper_compute_type = float16 (bkz. config.sergi5090.json).
+#   * cuBLAS wheel'i CUDA 12.8 yapisi olmali; 12.8 oncesi cublas64_12.dll
+#     sm_120 cekirdegi icermez.
+# Eski sergi PC'si (GTX 1660 Ti, sm_75) bu tabanlardan etkilenmez — ayni
+# surumler orada da calisir, dolayisiyla tek requirements.txt yetiyor.
+ctranslate2>=4.6.3,<5
+nvidia-cublas-cu12>=12.8
+nvidia-cudnn-cu12>=9.7,<10
 
 # Seslendirme (TTS)
 # Birincil: edge-tts (Microsoft, ucretsiz/anahtarsiz, cevrimici, yuksek kalite)
@@ -20,3 +32,11 @@ edge-tts>=7.0
 # Cevrimdisi yedek: Piper (yerel, CPU). ffmpeg: perde kaydirma + mp3->wav normalize
 piper-tts>=1.4
 imageio-ffmpeg>=0.5
+
+# Jest/emoji hatti: gesture_engine.py emoji sprite'larini PIL ile uretir
+# (ust duzey import, opsiyonel degil). Sistem Python'unda tesadufen kuruluydu;
+# temiz venv'de aican bu satir olmadan aciliyor ama jest hatti cokuyordu.
+pillow>=10
+# web_server.py denoise yolunda dogrudan kullaniliyor. noisereduce/faster-whisper
+# uzerinden gecisli zaten geliyor; kirilmasin diye acikca yaziyoruz.
+numpy>=1.24
