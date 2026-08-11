@@ -37,6 +37,22 @@ Alternatifler (denemek istersen `config.sergi5090.json` içinde `ollama_model`):
 `qwen3.5:35b-a3b` (~24 GB, daha çok toplam parametre, daha dar VRAM payı) ·
 `gemma4:12b` (~7,6 GB, en hızlısı, kart başka iş de yapacaksa).
 
+### Sergi TEST MODUNDA açılıyor — modelin rolü
+
+`config.sergi5090.json` içinde `test_mode: true`. Bu modda menüde yalnız
+**Eş/Zıt Anlam + Atasözü** var, sohbet kapalı, "merhaba" doğrudan oyun menüsünü
+açıyor. Ekranda **`g`** ile açılıp kapanır ve `config.json`'a kalıcı yazar.
+
+Test modu açıkken **LLM hiç çağrılmıyor** — `/api/send` sohbeti `bridge.request`'e
+gitmeden geri döner, `word_llm`'in tek kullanıcısı olan kelime oyunu da
+`izinli_oyunlar` dışında kalır. Yani bu modda **kritik yol ses tanımadır**;
+`large-v3` + `float16` + `beam_size 5` bu yüzden seçildi.
+
+Buna rağmen model boşuna inmiyor: `warmup_on_start` + `keep_alive: -1` sayesinde
+açılışta VRAM'e yüklenip orada kalıyor. Sergide `g` ile sohbeti açtığında ilk
+ziyaretçi 18 GB'lik soğuk yüklemeyi beklemez — cevap ilk andan itibaren hızlı.
+VRAM bütçesi zaten ikisini birlikte sayıyor (model + Whisper yerleşik, ~22/32 GB).
+
 ### RTX 5090'da dikkat: INT8 ÇALIŞMAZ
 
 Blackwell (sm_120) INT8 tensor çekirdekleri farklı padding istiyor; CTranslate2

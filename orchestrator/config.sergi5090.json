@@ -73,6 +73,7 @@
   "web_kiosk_browser": true,
   "web_fullscreen": true,
   "_test_mode_notu": "SERGIDE ACIK KULLANILIYOR (kullanici karari, 2026-08-11): menude yalnizca Es/Zit Anlam + Atasozu, sohbet KAPALI, 'merhaba' dogrudan oyun menusunu acar. Ekranda 'g' tusu acip kapar ve config.json'a kalici yazar — sergi acilisinda ACIK basladigindan emin ol. Eski sergi profilinde bu anahtar hic yoktu (varsayilan false); burada acikca yaziyoruz.",
-  "_test_mode_sonucu": "DIKKAT: test modu acikken LLM HIC KULLANILMIYOR. /api/send sohbeti bridge.request'e gitmeden geri doner; kelime oyunu (tek word_llm kullanicisi) izinli_oyunlar disinda kaldigi icin erisilemez. Yani ollama_model sadece test modu KAPATILDIGINDA devreye girer. Bu kurulumda kritik yol STT'dir -> whisper large-v3 + float16 + beam_size 5.",
+  "_test_mode_sonucu": "Test modu acikken LLM HIC CAGRILMIYOR: /api/send sohbeti bridge.request'e gitmeden geri doner (web_server.py), kelime oyunu (tek word_llm kullanicisi) izinli_oyunlar disinda kalir. Yani ollama_model ancak 'g' ile test modu KAPATILINCA konusur. Bu kurulumda kritik yol STT'dir -> whisper large-v3 + float16 + beam_size 5.",
+  "_warmup_notu": "warmup_on_start=true + keep_alive=-1 sayesinde model, test modu acik olsa bile ACILISTA VRAM'e yuklenir ve orada kalir. Sergide 'g' ile sohbet acildiginda ilk ziyaretci 18 GB'lik soguk yuklemeyi BEKLEMEZ. VRAM butcesi bunu zaten sayiyor (model + Whisper es zamanli yerlesik).",
   "test_mode": true
 }
