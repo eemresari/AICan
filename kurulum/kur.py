@@ -329,7 +329,7 @@ def adim_ses_varliklari(cfg: dict) -> None:
     """Piper çevrimdışı sesi + ElevenLabs ön-üretim cache'i.
 
     İkisi de .gitignore'da: git clone ile GELMEZLER. Piper sesi (60 MB)
-    buradan indirilebilir; cache (~450 MB) ElevenLabs kredisiyle üretildiği
+    buradan indirilebilir; cache (~830 MB) ElevenLabs kredisiyle üretildiği
     için elden taşınır — eksikse ne yapılacağını söyle."""
     baslik(8, "Ses varlıkları (çevrimdışı ses + ön-üretim cache)")
 
@@ -353,7 +353,7 @@ def adim_ses_varliklari(cfg: dict) -> None:
         print(f"  ElevenLabs ön-üretim cache'i: {n} ses parçası ✔")
     else:
         print(f"  !! ElevenLabs ön-üretim cache'i EKSİK ({n} parça).")
-        print("     Bu klasör git'te YOK (~450 MB) — eski PC'den elden taşınmalı:")
+        print("     Bu klasör git'te YOK (~830 MB) — eski PC'den elden taşınmalı:")
         print("       ESKİ PC'de:  cd orchestrator && python -m tts.paket_hazirla --kopyala")
         print("       paketi USB ile taşı, YENİ PC'de cache/ içeriğini şuraya kopyala:")
         print(f"       {cache}")

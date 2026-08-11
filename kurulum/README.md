@@ -99,7 +99,7 @@ Soru sormadan kurmak için: `KUR.bat --sessiz` (profil karttan seçilir, otomati
 
 ## C) Elden taşınması gereken TEK şey: ses önbelleği
 
-`orchestrator/tts/cache/` (~450 MB) ElevenLabs kredisiyle üretilmiş hazır
+`orchestrator/tts/cache/` (~830 MB) ElevenLabs kredisiyle üretilmiş hazır
 seslerdir ve `.gitignore`'da — **klonla gelmez**.
 
 ```powershell

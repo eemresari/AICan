@@ -15,7 +15,7 @@
     Bu dosyayi USB ile tasi (ya da depodan tek dosya indir). Baska hicbir
     sey tasimana gerek yok — TEK istisna ses onbellegi, bkz. asagida.
 
-    ELDEN TASINMASI GEREKEN TEK SEY: orchestrator/tts/cache  (~450 MB)
+    ELDEN TASINMASI GEREKEN TEK SEY: orchestrator/tts/cache  (~830 MB)
     ElevenLabs ile uretilmis hazir sesler; .gitignore'da oldugu icin klonla
     GELMEZ. Eski PC'de  `python -m tts.paket_hazirla --kopyala`  ile paketle,
     USB ile tasi. Tasinmazsa oyun yine calisir ama replikler canli
@@ -166,7 +166,7 @@ if ($sonuc -eq 0) {
     Uyari "KUR.bat hata ile bitti (kod $sonuc) — yukaridaki saglik kontrolu satirlarina bak."
 }
 Write-Host ""
-Bilgi "GERIYE KALAN TEK IS — ses onbellegi (git'te YOK, ~450 MB):"
+Bilgi "GERIYE KALAN TEK IS — ses onbellegi (git'te YOK, ~830 MB):"
 Bilgi "  1) ESKI PC'de:  cd orchestrator; python -m tts.paket_hazirla --kopyala"
 Bilgi "  2) olusan sergi_paketi\cache\  icerigini USB ile tasi ve suraya kopyala:"
 Bilgi "     $Hedef\orchestrator\tts\cache\"
