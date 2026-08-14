@@ -185,7 +185,11 @@ Nasıl işler:
 2. **Sergi ekranı** ölçer (mikrofon orada; Chrome'un ses işleme zincirinden
    geçmiş seviye ancak orada doğru okunur). Ekranda "Ortam sesi ölçülüyor —
    lütfen sessiz olun" yazar.
-3. Sonuç `config.json`'a yazılır, `.bat` ekranda gösterir.
+3. Ekran ayrıca o 4 saniyenin **sesini** de gönderir → `gurultu_profili.webm`.
+   Bu klip her transkripsiyonda Whisper öncesi gürültü bastırmaya referans olur
+   (gürültünün neye benzediğini bilen filtre, sesin içinden tahmin etmeye
+   çalışandan daha isabetli).
+4. Sonuç `config.json`'a yazılır, `.bat` ekranda gösterir.
 
 > ⚠️ **Ölçüm boyunca (~4 sn) kimse konuşmasın.** Konuşulursa ölçüm reddedilir
 > (`.bat` sebebini yazar), sistem eski eşiklerle devam eder — sessizliği sağlayıp
@@ -199,7 +203,23 @@ Diğer notlar:
 
 - **Salon dolunca/boşalınca ya da mikrofonun yeri değişince tekrar çalıştırın.**
 - Ekranın başındaysanız `.bat` yerine **`k`** tuşu aynı ölçümü yapar.
-- `kurulum\KALIBRASYON.bat --goster` → ölçmeden yalnızca kayıtlı değeri gösterir.
+- `kurulum\KALIBRASYON.bat --goster` → ölçmeden yalnızca kayıtlı değeri ve
+  gürültü profilinin durumunu gösterir.
+- Gürültü profili `orchestrator\gurultu_profili.webm` — **dinlenebilir**. İçinde
+  konuşma/müzik duyuyorsanız ölçüm kirlenmiş demektir, yeniden çalıştırın.
+  Dosyayı silmek profili devre dışı bırakır (sistem profilsiz çalışmaya döner).
+- Bastırma miktarı tek yerden ayarlanır: `whisper_denoise_prop_decrease`.
+  Profili kapatmak için `whisper_denoise_profile_enabled: false`.
+  ⚠️ Bu ayarları kurcalamadan önce okuyun: laboratuvar A/B'sinde (Whisper
+  large-v3, sentetik gürültü, 19–11 dB SNR) denoise'un **açık/kapalı olması bile
+  ölçülebilir fark yaratmadı**. Değiştirmeden önce `whisper_debug_save_audio`
+  ile sahadan gerçek kayıt toplayıp ölçün — tahminle ayar yapmayın.
+- STT logunda hangi yolun kullanıldığı yazar:
+  `denoise 44 ms (profil 4.0sn prop 0.65)` ya da `(profilsiz prop 0.70)`.
+- Profil beklendiği kadar kazandırmıyorsa: klip Chrome'un ses işleme zincirinden
+  geçerek kaydediliyor ve AGC'nin kazancı sessizlikte konuşmadakinden farklı
+  olabiliyor. Zinciri doğrusallaştırmayı deneyin —
+  `voice_input_noise_suppression: false` + `voice_input_auto_gain: false`.
 - `m` göstergesinde `kalib done` + yürürlükteki alt eşik görünür; çubuk kırmızı
   çizgiyi yalnız konuşurken geçmeli. Sürekli geçiyorsa ortam gürültülü → tekrar ölç.
 - Hiç ölçüm yapılmasa da sistem çalışır: `config.json`'daki eşikleri kullanır ve

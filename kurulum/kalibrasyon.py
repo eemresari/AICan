@@ -80,6 +80,15 @@ def kayitli_yazdir(durum: dict) -> None:
               f"   (medyan {k.get('p50') or 0:.4f} / p90 {k.get('p90') or 0:.4f})")
     else:
         print("  Kayitli olcum : YOK — sistem config'teki elle ayarli esikleri kullaniyor")
+    # Gurultu profili: Whisper oncesi denoise'un y_noise referansi.
+    pr = durum.get("profil") or {}
+    if not pr.get("denoise_acik", True):
+        print("  Gurultu profili: denoise KAPALI (whisper_denoise_enabled=false)")
+    elif pr.get("var"):
+        print(f"  Gurultu profili: VAR ({pr.get('sn')} sn)"
+              f" — denoise bastirma {pr.get('prop')}")
+    else:
+        print("  Gurultu profili: YOK — denoise gurultuyu sesin icinden tahmin ediyor")
     if not durum.get("enabled", True):
         print("  UYARI: config.json'da voice_input_calibration_enabled=false —")
         print("         kalibrasyon KAPALI, olcum yapilamaz.")
@@ -170,6 +179,15 @@ def main() -> int:
                 print(f"    ortam p90      : {s['p90']:.4f}")
                 print(f"    gurultu tabani : {s['floor']:.4f}")
                 print(f"    ALT ESIK       : {s['abs_min']:.4f}")
+                try:
+                    pr = _get(a.port, "/api/kalibrasyon").get("profil") or {}
+                    if pr.get("var"):
+                        print(f"    gurultu profili: {pr.get('sn')} sn kaydedildi"
+                              f" (denoise bastirma {pr.get('prop')})")
+                    elif pr.get("denoise_acik", True):
+                        print("    gurultu profili: KAYDEDILEMEDI — denoise profilsiz calisir")
+                except (urllib.error.URLError, OSError, ValueError):
+                    pass
                 print()
                 print("  Bu esik artik her acilista uygulanir; tekrar olcmeye gerek yok.")
                 print("  Salon dolunca/bosalinca ya da mikrofonun yeri degisince yeniden calistirin.")

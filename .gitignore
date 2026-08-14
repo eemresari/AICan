@@ -64,3 +64,7 @@ orchestrator/tts/sergi_paketi/
 orchestrator/tts/batch_run*.log
 # kalite testi ciktilari
 seslendirme_demo/
+
+# Ortam gurultu profili (KALIBRASYON.bat kaydeder) — SAHAYA OZEL ses klibi,
+# her kurulumda yeniden olculur; depoya girmemeli.
+orchestrator/gurultu_profili.webm

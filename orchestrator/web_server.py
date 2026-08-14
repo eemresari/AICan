@@ -165,21 +165,101 @@ def _noisereduce():
     return _NR["mod"]
 
 
+# ——— Gurultu PROFILI (kalibrasyonda kaydedilen ortam klibi) ————————————
+# noisereduce'un spektral gating'i "gurultunun neye benzedigini" bilirse cok
+# daha isabetli calisir. Profilsiz kullanimda kutuphane gurultuyu SESIN KENDI
+# ICINDEN tahmin etmek zorunda (non-stationary mod) — kisa/gurultulu kayitta bu
+# tahmin zayif. KALIBRASYON.bat olcum yaparken sergi ekrani ayni 4 saniyenin
+# SESINI de gonderir; burada saklanir ve her transkripsiyonda y_noise olarak
+# verilir (stationary=True — profil zaten ortamin sabit gurultusu).
+# Profil yoksa davranis DEGISMEZ: eski profilsiz yol calisir.
+#
+# UYARI — profil ne kadar temsil ediyor: klip tarayicinin DSP zincirinden
+# (echoCancellation/noiseSuppression/AGC) gecerek kaydedilir; konusma sesi de
+# ayni zincirden gecer, bu yuzden OLCEK tutar. Ama AGC kazanci sessizlikte ve
+# konusmada FARKLI olabilir; Chrome'un kendi noiseSuppression'i da gurultuyu
+# zaten kismen kirpar. Profil beklendigi kadar kazandirmiyorsa zinciri
+# dogrusallastirin: voice_input_noise_suppression=false + voice_input_auto_gain=false
+# (o zaman profil ortami birebir temsil eder) ve whisper_debug_save_audio ile A/B yapin.
+GURULTU_PROFILI_PATH = CONFIG_PATH.parent / "gurultu_profili.webm"
+_NOISE = {"yuklendi": False, "y": None, "sn": 0.0}
+# Profil en az bu kadar olmali — daha kisa klip guvenilir spektrum vermez.
+GURULTU_PROFILI_MIN_SN = 1.0
+
+# OLCUM NOTU (2026-08-14) — "olculen gurultuye gore prop_decrease'i otomatik
+# sec" fikri DENENDI ve CIKARILDI.
+#
+# Kontrollu A/B: Whisper large-v3, Piper ile uretilmis 10 Turkce cumle, sentetik
+# sergi gurultusu (genis bant + ugultu + kalabalik murmur), AYNI gurultulu ses
+# tum kosullara verildi, 3 tohum ortalandi (kosul basina n=30):
+#
+#   SNR      ham     profilsiz(0.7)  profil(0.5)  profil(0.7)
+#   14.9 dB  0.112   0.112           0.112        0.112
+#   10.8 dB  0.125   0.120           0.112        0.112
+#    7.3 dB  0.157   0.171           0.170        0.162
+#   ortalama 0.131   0.134           0.131        0.129
+#
+# Butun farklar olcum tabaninin (+-0.015) altinda: denoise'un ACIK/KAPALI olmasi
+# bile WER'i olculebilir sekilde degistirmiyor. Onceki bir kosuda gorulen buyuk
+# farklar KURGU HATASIYDI (her kosula farkli gurultu ornegi uretilmisti).
+#
+# Bu yuzden: profil destegi kalir (ilkesel olarak daha saglam, maliyeti ~5 ms),
+# ama veriyle desteklenmeyen prop merdiveni EKLENMEDI — sergide aciklanamayan
+# davranis uretirdi. Tek ayar noktasi: whisper_denoise_prop_decrease.
+# Sahada gercek kayitlarla (whisper_debug_save_audio) olculurse tekrar bakilir.
+
+
+def _gurultu_profili():
+    """Diskteki kalibrasyon gurultu klibini bir kez cozup onbellege al.
+
+    Doner: float32 @16kHz dizi ya da None (profil yok / kisa / bozuk).
+    Dosya degisince _NOISE['yuklendi'] False yapilir (POST /api/kalibrasyon/gurultu)."""
+    if _NOISE["yuklendi"]:
+        return _NOISE["y"]
+    _NOISE["yuklendi"] = True
+    _NOISE["y"], _NOISE["sn"] = None, 0.0
+    if not GURULTU_PROFILI_PATH.exists():
+        return None
+    try:
+        import numpy as np
+        from faster_whisper.audio import decode_audio
+        y = decode_audio(str(GURULTU_PROFILI_PATH), sampling_rate=16000)
+        sn = len(y) / 16000.0
+        if sn < GURULTU_PROFILI_MIN_SN:
+            log.warning("Gurultu profili cok kisa (%.2f sn) — kullanilmayacak", sn)
+            return None
+        _NOISE["y"] = np.ascontiguousarray(y, dtype=np.float32)
+        _NOISE["sn"] = sn
+        log.info("Gurultu profili yuklendi: %.1f sn (%s)", sn, GURULTU_PROFILI_PATH.name)
+        return _NOISE["y"]
+    except Exception as e:  # noqa: BLE001 — bozuk profil denoise'u durdurmaz
+        log.warning("Gurultu profili okunamadi (%s) — profilsiz devam", e)
+        return None
+
+
+def _denoise_prop(config: dict) -> float:
+    """Uygulanacak prop_decrease (tek kaynak: config)."""
+    return float(config.get("whisper_denoise_prop_decrease", 0.75))
+
+
 def _prepare_audio(audio_bytes: bytes, config: dict, trim_ms: int = 0):
-    """Ham ses bytes -> (float32 np.array @16kHz | None, denoise_ms, trim uygulanan ms).
+    """Ham ses bytes -> (float32 np.array @16kHz | None, denoise_ms, trim ms, not).
 
     Iki on-isleme tek decode ile: (1) TRIM — istemci konusma baslangicini bildirir
     (trim_ms); oncesindeki sessizlik/TTS yankisi atilir. Kayit surekli acik oldugundan
     blob'un basinda saniyelerce alakasiz ses birikebilir: Whisper'in AI'nin kendi
     cumlesini "duymasinin" (yanlis girdi) ve bosuna uzun cozumlemesinin ana kaynagi.
-    (2) DENOISE — spektral gating (mevcut davranis).
+    (2) DENOISE — spektral gating; kalibrasyon gurultu profili varsa y_noise ile
+    (stationary=True), yoksa eski profilsiz yolla.
+
+    'not' log/meta icin kisa ozet (orn. "profil 4.0sn prop 0.65").
 
     None donerse cagiran HAM bytes'i Whisper'a verir (davranis degismez). Model
     KILIDI DISINDA cagrilmali — bu CPU isi, kilidi bosuna tutmasin."""
     want_denoise = bool(config.get("whisper_denoise_enabled", False))
     trim_ms = max(0, int(trim_ms or 0))
     if not want_denoise and trim_ms <= 0:
-        return None, 0, 0
+        return None, 0, 0, ""
     try:
         import numpy as np
         from faster_whisper.audio import decode_audio
@@ -193,20 +273,30 @@ def _prepare_audio(audio_bytes: bytes, config: dict, trim_ms: int = 0):
             if len(y) - cut >= int(0.35 * 16000):
                 y = y[cut:]
                 trimmed = trim_ms
+        aciklama = ""
         if want_denoise:
             nr = _noisereduce()
             if nr is not None:
-                y = nr.reduce_noise(
-                    y=y, sr=16000,
-                    prop_decrease=float(config.get("whisper_denoise_prop_decrease", 0.75)),
-                    stationary=bool(config.get("whisper_denoise_stationary", False)),
-                )
+                prop = _denoise_prop(config)
+                profil = (_gurultu_profili()
+                          if config.get("whisper_denoise_profile_enabled", True) else None)
+                if profil is not None:
+                    # Profil ortamin SABIT gurultusu: stationary=True dogru mod.
+                    y = nr.reduce_noise(y=y, sr=16000, y_noise=profil,
+                                        stationary=True, prop_decrease=prop)
+                    aciklama = "profil %.1fsn prop %.2f" % (_NOISE["sn"], prop)
+                else:
+                    y = nr.reduce_noise(
+                        y=y, sr=16000, prop_decrease=prop,
+                        stationary=bool(config.get("whisper_denoise_stationary", False)),
+                    )
+                    aciklama = "profilsiz prop %.2f" % prop
         # ctranslate2 icin bitisik float32 dizi
         y = np.ascontiguousarray(y, dtype=np.float32)
-        return y, int((time.perf_counter() - t) * 1000), trimmed
+        return y, int((time.perf_counter() - t) * 1000), trimmed, aciklama
     except Exception as e:  # noqa: BLE001 — hata olursa ham sesle devam
         log.warning("Ses on-isleme hatasi — ham ses kullanilacak: %s", e)
-        return None, 0, 0
+        return None, 0, 0, ""
 
 
 def _stt_is_tts_echo(text: str, echo_text: str) -> bool:
@@ -1189,7 +1279,44 @@ def create_app(config: dict) -> Flask:
             "sonuc": voice_calib["sonuc"],
             "kayitli": _kayitli_kalibrasyon(),
             "enabled": bool(config.get("voice_input_calibration_enabled", True)),
+            "profil": {
+                "var": _gurultu_profili() is not None,
+                "sn": round(_NOISE["sn"], 2),
+                "denoise_acik": bool(config.get("whisper_denoise_enabled", False)),
+                "prop": _denoise_prop(config),
+            },
         })
+
+    @app.post("/api/kalibrasyon/gurultu")
+    def api_kalibrasyon_gurultu():
+        """Sergi ekrani olcum sirasinda kaydettigi ORTAM SESINI buraya yollar.
+        Diske yazilir ve her transkripsiyonda noisereduce'a y_noise olarak verilir
+        (Asama 3). Sonuc gonderiminden ONCE cagrilir; basarisiz olcumde hic gelmez,
+        yani eski profil korunur."""
+        f = request.files.get("audio")
+        if f is None:
+            return jsonify({"hata": "audio yok"}), 400
+        ham = f.read()
+        if not ham:
+            return jsonify({"hata": "bos ses"}), 400
+        # Once COZ, sonra yaz: bozuk/kisa klip calisan profili EZMESIN.
+        try:
+            from faster_whisper.audio import decode_audio
+            sn = len(decode_audio(io.BytesIO(ham), sampling_rate=16000)) / 16000.0
+        except Exception as e:  # noqa: BLE001
+            log.warning("Gurultu profili cozulemedi — eski profil korunuyor: %s", e)
+            return jsonify({"hata": "ses cozulemedi"}), 400
+        if sn < GURULTU_PROFILI_MIN_SN:
+            log.warning("Gurultu profili cok kisa (%.2f sn) — reddedildi", sn)
+            return jsonify({"hata": "cok kisa", "sn": sn}), 400
+        try:
+            GURULTU_PROFILI_PATH.write_bytes(ham)
+        except OSError as e:
+            log.warning("Gurultu profili yazilamadi: %s", e)
+            return jsonify({"hata": "yazilamadi"}), 500
+        _NOISE["yuklendi"] = False       # sonraki transkripsiyonda yeniden yuklensin
+        log.info("Gurultu profili kaydedildi: %.1f sn (%d KB)", sn, len(ham) // 1024)
+        return jsonify({"ok": True, "sn": round(sn, 2)})
 
     @app.post("/api/kalibrasyon/istek")
     def api_kalibrasyon_istek():
@@ -1441,7 +1568,8 @@ def create_app(config: dict) -> Flask:
 
         # STT ONCESI trim + opsiyonel gurultu bastirma — model KILIDINDAN ONCE
         # (CPU isi, kilidi tutmaz). Basarisiz/kapali ise ham bytes ile devam edilir.
-        prepared, denoise_ms, trimmed_ms = _prepare_audio(audio_bytes, config, trim_ms_req)
+        prepared, denoise_ms, trimmed_ms, denoise_not = _prepare_audio(
+            audio_bytes, config, trim_ms_req)
         stt_input = prepared if prepared is not None else io.BytesIO(audio_bytes)
 
         # Transcribe — re-entrancy lock (tek model, tek thread guvenli kullanim).
@@ -1530,7 +1658,7 @@ def create_app(config: dict) -> Flask:
         # Performans izleme noktasi: sahada hedef ~1 sn (GPU turbo). Belirgin
         # artis = CPU'ya dusulmus ya da VRAM taskini — /api/transcribe/status'a bak.
         log.info("STT %d ms%s%s%s | ses %.1f sn | baglam=%s",
-                 stt_ms, (f" | denoise {denoise_ms} ms" if denoise_ms else ""),
+                 stt_ms, (f" | denoise {denoise_ms} ms ({denoise_not})" if denoise_ms else ""),
                  (f" | trim {trimmed_ms} ms" if trimmed_ms else ""),
                  (" | kurtarma turu" if retried else ""),
                  getattr(info, "duration", 0.0), ctx or "sohbet")
@@ -1559,6 +1687,7 @@ def create_app(config: dict) -> Flask:
             "language_prob": getattr(info, "language_probability", 0.0),
             "stt_ms": stt_ms,
             "denoise_ms": denoise_ms,
+            "denoise": denoise_not,   # "profil 4.0sn prop 0.65" / "profilsiz prop 0.70"
             "trim_ms": trimmed_ms,
             "retry": retried,
         }

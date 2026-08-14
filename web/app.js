@@ -990,6 +990,8 @@
   let viCalibAbsMin = 0;         // kalibrasyondan gelen mutlak alt eşik (0 = yok)
   let viCalibEl = null;          // "ortam ölçülüyor" ekran bildirimi
   let viCalibSeq = 0;            // sunucudaki ölçüm-isteği sayacı (değişince ölç)
+  let viCalibRec = null;         // ölçüm boyunca ortam SESİNİ kaydeden ayrı recorder
+  let viCalibChunks = [];        // → sunucuya gürültü profili olarak yüklenir
   let viFloorBuf = null;         // halka tampon (Float32Array) — son pencere RMS'leri
   let viFloorCap = 0;
   let viFloorHead = 0;
@@ -1331,6 +1333,44 @@
     return true;
   }
 
+  // ——— Gürültü profili kaydı (Aşama 3) ————————————————————————————
+  // Ölçüm penceresi boyunca ortamın SESİ de kaydedilir ve sunucuya yüklenir.
+  // Orada noisereduce'a y_noise olarak verilir: "gürültünün neye benzediğini"
+  // bilen spektral gating, sesin içinden tahmin etmeye çalışandan çok daha
+  // isabetli. Ana kayıt cihazından (viRec) AYRI bir MediaRecorder kullanılır —
+  // onun onstop/gönderim mantığına hiç dokunmaz.
+  function viCalibRecStart() {
+    if (!viStream || viCalibRec) return;
+    const opts = { audioBitsPerSecond: 128000 };
+    if (viMime) opts.mimeType = viMime;
+    try {
+      viCalibRec = new MediaRecorder(viStream, opts);
+    } catch (e) {
+      console.warn('VI: kalibrasyon kaydedicisi açılamadı — profilsiz devam', e);
+      viCalibRec = null;
+      return;
+    }
+    viCalibChunks = [];
+    viCalibRec.ondataavailable = (ev) => {
+      if (ev.data && ev.data.size > 0) viCalibChunks.push(ev.data);
+    };
+    try { viCalibRec.start(); } catch (e) { viCalibRec = null; }
+  }
+
+  // cb(blob|null) — kaydedici yoksa/boşsa null ile çağrılır (akış durmaz).
+  function viCalibRecStop(cb) {
+    const rec = viCalibRec;
+    viCalibRec = null;
+    if (!rec || rec.state !== 'recording') { viCalibChunks = []; cb(null); return; }
+    rec.onstop = () => {
+      const b = viCalibChunks.length
+        ? new Blob(viCalibChunks, { type: viMime || 'audio/webm' }) : null;
+      viCalibChunks = [];
+      cb(b);
+    };
+    try { rec.stop(); } catch (_) { viCalibChunks = []; cb(null); }
+  }
+
   // Ölçüm sonucunu sunucuya bildir — orada config.json'a kalıcı yazılır ve
   // KALIBRASYON.bat sonucu ekranda görür. Ağ hatası ölçümü geçersiz kılmaz
   // (değerler bu oturumda zaten yürürlükte), yalnız kalıcı olmaz.
@@ -1357,6 +1397,8 @@
     // Ölçüm boyunca kayıt açılmasın (mikrofon yalnız dinliyor).
     viHoldUntil = viCalibStartAt + VI.calibMs + 300;
     if (viRec && viRec.state === 'recording') viStopRecorder('discard');
+    viCalibRecStop(function () {});   // yarım kalmış önceki kayıt varsa at
+    viCalibRecStart();                // ortam sesini gürültü profili için kaydet
     viSetListeningBadge(false);
     console.info('VI: ortam gürültüsü ölçülüyor (%d ms)', VI.calibMs);
   }
@@ -1370,9 +1412,13 @@
     if (stSpeaking) {
       viCalibStartAt = now;
       viCalibSamples = [];
+      // Kaydı da at: profil klibinde TTS sesi olmamalı, yoksa noisereduce
+      // AI'nın kendi sesini "ortam gürültüsü" sanıp konuşmayı bastırır.
+      if (viCalibRec) viCalibRecStop(function () {});
       viCalibNotice('🎤 Ortam ölçümü bekliyor (ses çalıyor)…');
       return true;
     }
+    if (!viCalibRec) viCalibRecStart();   // pencere yeniden başladı → kayıt da
     viCalibSamples.push(rms);
     const elapsed = now - viCalibStartAt;
     const left = Math.max(0, Math.ceil((VI.calibMs - elapsed) / 1000));
@@ -1390,6 +1436,9 @@
     viCalibAbsMin = 0;              // config'teki elle ayarlı eşiğe dön
     viCalibState = 'failed';
     viCalibNotice('');
+    // Kayıt ATILIR — yüklenmez. Başarısız ölçümün klibi (içinde konuşma olabilir)
+    // sunucudaki ÇALIŞAN profili ezmemeli.
+    viCalibRecStop(function () {});
     // Canlı yüzdelik taban çalışmayı sürdürür — sistem yine de ortama uyar.
     console.warn('VI: ortam kalibrasyonu başarısız (%s) — config eşikleri + canlı taban kullanılacak', sebep);
     viShowHint('Ortam ölçümü yapılamadı — varsayılan ayarlarla devam');
@@ -1416,10 +1465,23 @@
     viCalibNotice('');
     console.info('VI: ortam kalibre edildi — medyan %s / p90 %s → taban %s, alt eşik %s',
                  p50.toFixed(4), p90.toFixed(4), viNoiseFloor.toFixed(4), viEffAbsMin().toFixed(4));
-    // Sunucuya bildir → config.json'a kalıcı yazılır, bir daha ölçüm gerekmez.
-    viCalibReport({ ok: true, floor: viNoiseFloor, abs_min: viCalibAbsMin,
-                    p50: p50, p90: p90 });
     viShowHint('Ortam kalibre edildi — alt eşik ' + viEffAbsMin().toFixed(4));
+    // Değerleri ŞİMDİ yakala: aşağıdaki geri çağrı asenkron, o ana kadar canlı
+    // taban viNoiseFloor'u kaydırmış olabilir.
+    const sonuc = { ok: true, floor: viNoiseFloor, abs_min: viCalibAbsMin,
+                    p50: p50, p90: p90 };
+    // Önce GÜRÜLTÜ PROFİLİ yüklenir, sonra sonuç bildirilir — KALIBRASYON.bat
+    // sonucu gördüğünde profil de yerinde olsun. Yükleme başarısız olursa
+    // ölçüm yine geçerlidir (yalnız denoise profilsiz çalışır).
+    viCalibRecStop(function (blob) {
+      if (!blob) { viCalibReport(sonuc); return; }
+      const fd = new FormData();
+      fd.append('audio', blob, 'gurultu.webm');
+      fetch('/api/kalibrasyon/gurultu', { method: 'POST', body: fd })
+        .then((r) => { if (!r.ok) console.warn('VI: gürültü profili reddedildi', r.status); })
+        .catch((e) => console.warn('VI: gürültü profili yüklenemedi', e))
+        .then(() => viCalibReport(sonuc));
+    });
   }
 
   function viMonitorTick() {
@@ -1667,6 +1729,7 @@
     if (viCtx) { try { viCtx.close(); } catch (_) {} viCtx = null; }
     viAnalyser = null; viData = null;
     if (viCalibState === 'running') viCalibState = 'none';   // yarım ölçüm sayılmasın
+    viCalibRecStop(function () {});
     viCalibNotice('');
     viSetListeningBadge(false);
     console.info('VI: sürekli sesli giriş KAPALI');
