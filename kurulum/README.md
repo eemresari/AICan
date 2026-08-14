@@ -165,21 +165,45 @@ gecikme), anahtar da yoksa ücretsiz edge/Piper sesine düşer.
 - **Test modu:** herhangi bir ekranda **`g`** → sadece Eş/Zıt + Atasözü, sohbet kapalı,
   "merhaba" doğrudan oyun menüsü açar. Ayar kalıcıdır.
 - Ekran kısayolları: `f` tam ekran · `d` sürekli mikrofon aç/kapa · `s` ses aç/kapa ·
-  `m` mikrofon seviye göstergesi · **`k` ortam gürültüsünü yeniden ölç**.
+  `m` mikrofon seviye göstergesi · `k` ortam gürültüsünü ölç.
 
-### Ortam gürültüsü kalibrasyonu
+### E) Ortam gürültüsü kalibrasyonu — sergi kurulduktan sonra BİR KEZ
 
-Ekran ilk açıldığında **4 saniye boyunca ortamı dinler** ("Ortam sesi ölçülüyor —
-lütfen sessiz olun" yazar) ve konuşma eşiğini o salona göre kendi kurar. Bu süre
-boyunca **kimse konuşmasın**, yoksa ölçüm reddedilir (ekranda uyarır) ve
-varsayılan ayarlarla devam eder.
+Salonun kendi gürültüsü (klima, projeksiyon, kalabalık uğultusu) mikrofonun
+konuşma eşiğini şaşırtır. Sergi **son haline geldikten sonra** bir kez ölçün:
 
-- Ölçüm 12 saat geçerlidir; sayfa yenilense de tekrar sormaz.
-- **Salon dolunca/boşalınca ya da mikrofonun yeri değişince `k` ile yeniden ölç.**
-- `m` göstergesinde `kalib done` + ölçülen alt eşik görünür; çubuk kırmızı çizgiyi
-  yalnız konuşurken geçmeli. Sürekli geçiyorsa ortam gürültülü → `k`.
-- Ölçüm reddedilse bile sistem canlı olarak ortamı takip etmeyi sürdürür,
-  sadece daha yavaş uyum sağlar.
+```
+kurulum\KALIBRASYON.bat
+```
+
+**Her açılışta otomatik ölçüm YAPILMAZ** — ölçüm bir kez yapılır, sonuç
+`config.json`'a yazılır ve sonraki her açılışta uygulanır.
+
+Nasıl işler:
+
+1. `KALIBRASYON.bat` sunucuya ölçüm isteği bırakır.
+2. **Sergi ekranı** ölçer (mikrofon orada; Chrome'un ses işleme zincirinden
+   geçmiş seviye ancak orada doğru okunur). Ekranda "Ortam sesi ölçülüyor —
+   lütfen sessiz olun" yazar.
+3. Sonuç `config.json`'a yazılır, `.bat` ekranda gösterir.
+
+> ⚠️ **Ölçüm boyunca (~4 sn) kimse konuşmasın.** Konuşulursa ölçüm reddedilir
+> (`.bat` sebebini yazar), sistem eski eşiklerle devam eder — sessizliği sağlayıp
+> tekrar çalıştırın.
+
+**Ön koşul:** sistem çalışıyor olmalı (`BASLAT.bat`), sergi ekranı açık ve
+mikrofon dinlemesi açık olmalı (`d` tuşu). Sonucun gelmesi ~10 sn sürebilir
+(ekran sunucuyu bu aralıkla yoklar).
+
+Diğer notlar:
+
+- **Salon dolunca/boşalınca ya da mikrofonun yeri değişince tekrar çalıştırın.**
+- Ekranın başındaysanız `.bat` yerine **`k`** tuşu aynı ölçümü yapar.
+- `kurulum\KALIBRASYON.bat --goster` → ölçmeden yalnızca kayıtlı değeri gösterir.
+- `m` göstergesinde `kalib done` + yürürlükteki alt eşik görünür; çubuk kırmızı
+  çizgiyi yalnız konuşurken geçmeli. Sürekli geçiyorsa ortam gürültülü → tekrar ölç.
+- Hiç ölçüm yapılmasa da sistem çalışır: `config.json`'daki eşikleri kullanır ve
+  ortamı canlı olarak takip eder, sadece daha yavaş uyum sağlar.
 - Sorun çıkarsa `config.json` → `voice_input_calibration_enabled: false` eski
   (elle ayarlı eşikli) davranışı birebir geri getirir.
 
@@ -194,8 +218,8 @@ varsayılan ayarlarla devam eder.
 - [ ] Test modu rozeti yanıyor mu? (`g`)
 - [ ] Her iki oyundan birer tur oyna
 - [ ] Ses seviyesi / mikrofon mesafesi sahada ayarlandı mı?
-- [ ] **Ortam kalibrasyonu salon son halindeyken yapıldı mı?** (`k`, 4 sn sessizlik —
-      `m` göstergesinde `kalib done` görünmeli)
+- [ ] **Ortam kalibrasyonu salon son halindeyken yapıldı mı?**
+      (`kurulum\KALIBRASYON.bat` — 4 sn sessizlik; `--goster` ile doğrula)
 
 ## Sorun giderme
 
@@ -211,6 +235,7 @@ varsayılan ayarlarla devam eder.
 | Ses yok | Tarayıcıda sayfaya bir kez tıkla; `s` tuşu ses kapalı olabilir; sağlık kontrolüne bak |
 | Sesler robot gibi / farklı | TTS cache taşınmamış → C bölümü |
 | Mikrofon çalışmıyor | Tarayıcı adres çubuğu → mikrofon izni; Windows ayarları → gizlilik → mikrofon |
-| **Kimse konuşmadan kendi kendine dinlemeye başlıyor** | Ortam gürültüsü eşiğin üstünde → `k` ile yeniden kalibre et (4 sn sessizlik). `m` ile eşiği doğrula |
-| **Ölçüm sırasında "Ortam ölçümü yapılamadı" çıktı** | Ölçüm sırasında konuşulmuş ya da ortam çok gürültülü → sessizliği sağlayıp `k` |
+| **Kimse konuşmadan kendi kendine dinlemeye başlıyor** | Ortam gürültüsü eşiğin üstünde → `kurulum\KALIBRASYON.bat` (4 sn sessizlik). `m` ile eşiği doğrula |
+| **Kalibrasyon "reddedildi" dedi** | Ölçüm sırasında konuşulmuş ya da ortam çok gürültülü → sessizliği sağlayıp tekrar çalıştır |
+| **Kalibrasyon "zaman aşımı" dedi** | Sergi ekranı kapalı ya da mikrofon dinlemesi kapalı → ekranı aç, `d` ile dinlemeyi aç, tekrar çalıştır |
 | `git clone` yetki hatası | Depo özel — GitHub kullanıcı adı + **PAT** gir (parola değil) |

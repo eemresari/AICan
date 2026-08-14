@@ -725,6 +725,16 @@ def create_app(config: dict) -> Flask:
     game = GameEngine(bridge=bridge)  # TKM deterministik; kelime turetme (ileride) LLM kullanir
     # Test modu durumu (config.json'dan; 'g' tusu / POST /api/test_mode degistirir).
     test_mode = {"on": bool(config.get("test_mode", False))}
+    # Ortam gurultusu kalibrasyonu — TETIKLEME KUTUSU.
+    # Olcumu SERGI EKRANI yapar (mikrofon + Chrome DSP zinciri orada; Python'dan
+    # okunan ham PCM ile tarayicinin AGC/noiseSuppression sonrasi RMS'i ayni
+    # OLCEKTE DEGIL — esikler tasinmaz). Sunucu yalnizca aracidir:
+    #   1. KALIBRASYON.bat -> POST /api/kalibrasyon/istek -> seq artar
+    #   2. Sergi ekrani /api/config yoklamasinda seq degisimini gorur, olcer
+    #   3. Ekran POST /api/kalibrasyon/sonuc -> burada config.json'a YAZILIR
+    # Boylece olcum bir kez yapilir, her acilista degil: ekran acilista
+    # config'teki kayitli degerleri uygular.
+    voice_calib = {"seq": 0, "sonuc": None, "istek_at": 0.0}
     if test_mode["on"]:
         game.izinli_oyunlar = TEST_OYUNLAR
         game.voice_only = True
@@ -921,11 +931,10 @@ def create_app(config: dict) -> Flask:
                 "noise_suppression": bool(config.get("voice_input_noise_suppression", True)),
                 "auto_gain": bool(config.get("voice_input_auto_gain", True)),
                 # ——— Ortam gurultusu kalibrasyonu ———
-                # calibration_enabled=true: mikrofon acilinca calib_ms boyunca
-                # KIMSE KONUSMADAN ortam dinlenir; olcumun medyani gurultu tabani,
-                # p90'i (calib_headroom ile) MUTLAK ALT ESIK olur. Boylece salonun
-                # ugultusu konusma sayilmaz ve abs_min_rms'i sahada elle kismak
-                # gerekmez. abs_min_rms yine ALT SINIR: kalibrasyon esigi yalnizca
+                # Olcum ACILISTA OTOMATIK YAPILMAZ. KALIBRASYON.bat (ya da ekranda
+                # 'k' tusu) bir kez olcturur; sonuc config.json'a yazilir ve her
+                # acilista buradan okunup uygulanir (calib_floor / calib_abs_min).
+                # abs_min_rms ALT SINIR olarak korunur: kalibrasyon esigi yalnizca
                 # yukseltebilir. Ayrica canli gurultu tabani EMA yerine yuzdelik
                 # ile izlenir (gurultulu ortamda EMA kilitleniyordu). false yapmak
                 # ESKI davranisi birebir geri getirir.
@@ -935,6 +944,13 @@ def create_app(config: dict) -> Flask:
                 # Olculen medyan bunu asarsa kalibrasyon REDDEDILIR (olcum sirasinda
                 # konusuldu / mikrofon bozuk): config esikleri + canli taban devreye girer.
                 "calib_max_rms": float(config.get("voice_input_calib_max_rms", 0.08)),
+                # Kayitli olcum — ekran acilista bunlari uygular (0/None = hic olculmedi).
+                "calib_floor": config.get("voice_input_calib_floor"),
+                "calib_abs_min": config.get("voice_input_calib_abs_min"),
+                "calib_at": config.get("voice_input_calib_at"),
+                # Bekleyen olcum istegi sayaci: KALIBRASYON.bat artirir, ekran
+                # degisimi gorunce olcumu baslatir (yoklama ~10 sn).
+                "calib_seq": voice_calib["seq"],
                 # Canli taban: son floor_window_ms'lik pencerenin en sessiz
                 # floor_pct'lik dilimi ortam gurultusu sayilir.
                 "floor_window_ms": int(config.get("voice_input_floor_window_ms", 15000)),
@@ -1153,6 +1169,84 @@ def create_app(config: dict) -> Flask:
         logger.log_event("Test modu " + ("ACIK (yalniz " + ", ".join(TEST_OYUNLAR) + ")"
                                          if on else "KAPALI"))
         return jsonify({"on": on, "games": list(TEST_OYUNLAR)})
+
+    # ——— Ortam gurultusu kalibrasyonu ————————————————————————————
+    def _kayitli_kalibrasyon() -> dict:
+        """config'teki kalici kalibrasyon (yoksa hepsi None/0)."""
+        return {
+            "floor": config.get("voice_input_calib_floor"),
+            "abs_min": config.get("voice_input_calib_abs_min"),
+            "p50": config.get("voice_input_calib_p50"),
+            "p90": config.get("voice_input_calib_p90"),
+            "at": config.get("voice_input_calib_at"),
+        }
+
+    @app.get("/api/kalibrasyon")
+    def api_kalibrasyon_get():
+        """KALIBRASYON.bat bunu yoklar: bekleyen istek + son sonuc + kayitli deger."""
+        return jsonify({
+            "seq": voice_calib["seq"],
+            "sonuc": voice_calib["sonuc"],
+            "kayitli": _kayitli_kalibrasyon(),
+            "enabled": bool(config.get("voice_input_calibration_enabled", True)),
+        })
+
+    @app.post("/api/kalibrasyon/istek")
+    def api_kalibrasyon_istek():
+        """Sergi ekranindan YENI olcum iste. Ekran bunu /api/config yoklamasinda
+        (~10 sn) gorur ve olcer. Doner: bu istegin seq'i — bat bekleyecegi
+        sonucu bununla eslestirir (eski sonucu yeni saymasin)."""
+        voice_calib["seq"] += 1
+        voice_calib["sonuc"] = None
+        voice_calib["istek_at"] = time.time()
+        log.info("Ortam kalibrasyonu istendi (seq=%d) — sergi ekrani olcecek", voice_calib["seq"])
+        return jsonify({"seq": voice_calib["seq"]})
+
+    @app.post("/api/kalibrasyon/sonuc")
+    def api_kalibrasyon_sonuc():
+        """Sergi ekrani olcumu bitirince buraya yazar. ok=true ise degerler
+        config.json'a KALICI islenir (bir daha olcum gerekmez)."""
+        d = request.get_json(silent=True) or {}
+        ok = bool(d.get("ok"))
+        sonuc = {
+            "ok": ok,
+            "seq": int(d.get("seq") or 0),
+            "floor": float(d.get("floor") or 0.0),
+            "abs_min": float(d.get("abs_min") or 0.0),
+            "p50": float(d.get("p50") or 0.0),
+            "p90": float(d.get("p90") or 0.0),
+            "sebep": (d.get("sebep") or "")[:200],
+            "at": time.time(),
+        }
+        voice_calib["sonuc"] = sonuc
+        if not ok:
+            log.warning("Ortam kalibrasyonu BASARISIZ: %s", sonuc["sebep"])
+            return jsonify(sonuc)
+        # Kalicilik: test_mode ile ayni desen — diskteki config tazelenir,
+        # YALNIZ bu anahtarlar yazilir (calisma-zamani degisiklikleri sizmasin).
+        for k, v in (("voice_input_calib_floor", sonuc["floor"]),
+                     ("voice_input_calib_abs_min", sonuc["abs_min"]),
+                     ("voice_input_calib_p50", sonuc["p50"]),
+                     ("voice_input_calib_p90", sonuc["p90"]),
+                     ("voice_input_calib_at", sonuc["at"])):
+            config[k] = v
+        try:
+            disk = load_config()
+        except (OSError, ValueError) as e:
+            log.warning("config.json okunamadi (%s) — bellekteki kopya yazilacak", e)
+            disk = dict(config)
+        for k in ("voice_input_calib_floor", "voice_input_calib_abs_min",
+                  "voice_input_calib_p50", "voice_input_calib_p90",
+                  "voice_input_calib_at"):
+            disk[k] = config[k]
+        try:
+            save_config(disk)
+        except OSError as e:
+            log.warning("config.json yazilamadi: %s", e)
+        log.info("Ortam kalibre edildi — taban %.4f / alt esik %.4f (p50 %.4f, p90 %.4f)",
+                 sonuc["floor"], sonuc["abs_min"], sonuc["p50"], sonuc["p90"])
+        logger.log_event("Ortam gurultusu kalibre edildi: alt esik %.4f" % sonuc["abs_min"])
+        return jsonify(sonuc)
 
     # ——— Oyun modu (Kelime Türetme; deterministik akis, AI kelimeleri temali havuzdan) ————
     @app.post("/api/game/start")

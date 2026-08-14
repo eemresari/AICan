@@ -69,7 +69,7 @@
   "voice_input_barge_in_mult": 2.0,
   "voice_input_barge_in_min_ms": 280,
   "voice_input_hold_during_speech": true,
-  "_gurultu_kalibrasyonu_notu": "Sistem acilirken calib_ms boyunca KIMSE KONUSMADAN ortam dinlenir; olcumun medyani gurultu tabani, p90'i calib_headroom ile carpilip MUTLAK ALT ESIK olur. voice_input_abs_min_rms yine alt sinirdir (kalibrasyon esigi yalnizca YUKSELTEBILIR). Ayrica canli gurultu tabani EMA yerine yuzdelik pencere ile izlenir; eski EMA gurultulu ortamda kilitlenip sistemi surekli 'konusma var' sanmaya itiyordu. Sergi ekraninda 'k' tusu ortami YENIDEN olcer (salon dolunca/bosalinca), 'm' tusu canli RMS + esik + kalibrasyon durumunu gosterir. Sorun cikarsa voice_input_calibration_enabled=false ESKI davranisi birebir geri getirir.",
+  "_gurultu_kalibrasyonu_notu": "Salonun kendi gurultusune gore konusma esigi. OLCUM ACILISTA OTOMATIK YAPILMAZ: sergi kurulduktan sonra BIR KEZ kurulum\\KALIBRASYON.bat calistirilir (ekranda k tusu de ayni isi yapar). Olcum SERGI EKRANINDA yapilir cunku Python'dan okunan ham PCM ile Chrome'un AGC/noiseSuppression zincirinden gecmis RMS ayni olcekte degil. Sonuc buraya yazilir (voice_input_calib_floor / _abs_min) ve her acilista uygulanir. voice_input_abs_min_rms ALT SINIRDIR: kalibrasyon esigi yalnizca YUKSELTEBILIR. Ayrica canli gurultu tabani EMA yerine yuzdelik pencere ile izlenir; eski EMA gurultulu ortamda kilitlenip sistemi surekli 'konusma var' sanmaya itiyordu. Sergi ekraninda m tusu canli RMS + esik + kalibrasyon durumunu gosterir. Sorun cikarsa voice_input_calibration_enabled=false ESKI davranisi birebir geri getirir.",
   "voice_input_calibration_enabled": true,
   "voice_input_calib_ms": 4000,
   "voice_input_calib_headroom": 1.35,

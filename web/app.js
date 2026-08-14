@@ -904,9 +904,11 @@
     holdDuringSpeech: true, // AI konuşurken kesme; söyleneni biriktir, AI bitince cevaba çevir
     // ——— Ortam gürültüsü kalibrasyonu (aşağıdaki blokta anlatılıyor) ———
     calibrationEnabled: true, // false → ESKİ davranış (EMA tabanı + elle ayarlı eşikler) birebir
-    calibMs: 4000,            // açılışta kaç ms sessiz ortam dinlenip ölçülecek
+    calibMs: 4000,            // ölçüm ne kadar sessiz ortam dinleyecek
     calibHeadroom: 1.35,      // kalibre alt eşik = ölçülen p90 * bu (tepe gürültü konuşma sayılmasın)
     calibMaxRms: 0.08,        // ölçülen medyan bunu aşarsa kalibrasyon REDDEDİLİR (konuşuldu/mikrofon bozuk)
+    calibFloor: 0,            // config.json'daki KAYITLI ölçüm (0 = hiç ölçülmedi)
+    calibAbsMin: 0,
     floorWindowMs: 15000,     // canlı gürültü tabanı penceresi
     floorPct: 0.10,           // pencerenin en sessiz %10'u = ortam gürültüsü
   };
@@ -914,10 +916,6 @@
   // eşiği sonsuza götürüp sistemi sağır etmesin.
   const VI_FLOOR_MAX_RMS = 0.15;
   const VI_FLOOR_MIN_RMS = 0.0004;
-  // Kalibrasyon sonucu bu kadar süre geçerli (tarayıcı yenilense de korunur).
-  // Sergi günü içinde tekrar ölçüm istemez; ortam değişince operatör 'k' ile yeniler.
-  const VI_CALIB_TTL_MS = 12 * 3600 * 1000;
-  const VI_CALIB_STORE_KEY = 'aican_vi_calib_v1';
   // AI konuşması biterken biriken kaydın başındaki yankı/sessizlik sunucuda
   // kırpılır (trim_ms). Bu sabit, yankı-yalnız kaydın en fazla ne kadar
   // birikeceğini sınırlar: kayıt bu yaştan eskiyse tazelenir (blob küçük kalsın).
@@ -957,14 +955,23 @@
   // Konuşma eşiği ortamın kendi gürültüsüne göre kayar (baseThr). Bunu iki
   // mekanizma besler:
   //
-  //  1) AÇILIŞ KALİBRASYONU (viCalib*): mikrofon açılınca calibMs kadar
-  //     KİMSE KONUŞMADAN ortam dinlenir. Ölçümün medyanı başlangıç gürültü
-  //     tabanı, p90'ı ise (calibHeadroom ile) MUTLAK ALT EŞİK olur. Böylece
-  //     salonun klima/kalabalık uğultusu "konuşma" sayılmaz ve sahada
-  //     abs_min_rms'i elle kısma ihtiyacı kalkar. Sonuç localStorage'a yazılır
-  //     (VI_CALIB_TTL_MS boyunca geçerli); operatör 'k' ile yeniden ölçtürür.
-  //     Config'ten gelen abs_min_rms ALT SINIR olarak korunur — kalibrasyon
-  //     eşiği yalnız YÜKSELTEBİLİR, asla elle ayarlanandan gevşetmez.
+  //  1) KALİBRASYON (viCalib*) — AÇILIŞTA OTOMATİK ÇALIŞMAZ. Sergi başlarken
+  //     4 sn sessizlik dayatmak kırılgandı: ziyaretçi/görevli konuşursa ölçüm
+  //     bozulur, her yeniden başlatmada tekrarlanırdı. Artık ölçüm AÇIK İSTEKLE
+  //     bir kez yapılır ve config.json'a yazılır:
+  //       • kurulum/KALIBRASYON.bat → POST /api/kalibrasyon/istek → sunucu
+  //         calib_seq'i artırır → bu ekran /api/config yoklamasında (10 sn)
+  //         değişimi görüp ölçer
+  //       • ya da ekranda 'k' tuşu (operatör ekranın başındaysa)
+  //     Ölçüm: calibMs boyunca KİMSE KONUŞMADAN ortam dinlenir; medyan gürültü
+  //     tabanı, p90 (calibHeadroom ile) MUTLAK ALT EŞİK olur. Sonuç
+  //     POST /api/kalibrasyon/sonuc ile sunucuya gider, config.json'a kalıcı
+  //     yazılır; sonraki her açılışta buradan okunup uygulanır (calibFloor/
+  //     calibAbsMin). Config'ten gelen abs_min_rms ALT SINIR olarak korunur —
+  //     kalibrasyon eşiği yalnız YÜKSELTEBİLİR, elle ayarlanandan gevşetmez.
+  //     ÖLÇÜM NEDEN TARAYICIDA: Python'dan okunan ham PCM ile Chrome'un
+  //     AGC/noiseSuppression zincirinden geçmiş RMS aynı ölçekte değil; eşik
+  //     ancak onu kullanacak yerde ölçülürse taşınır.
   //
   //  2) CANLI TABAN (viFloor*): son floorWindowMs'lik RMS penceresinin en
   //     sessiz %10'u (yüzdelik). Bu, eski EMA'nın yerine geçer. EMA yalnız
@@ -982,6 +989,7 @@
   let viCalibStartAt = 0;
   let viCalibAbsMin = 0;         // kalibrasyondan gelen mutlak alt eşik (0 = yok)
   let viCalibEl = null;          // "ortam ölçülüyor" ekran bildirimi
+  let viCalibSeq = 0;            // sunucudaki ölçüm-isteği sayacı (değişince ölç)
   let viFloorBuf = null;         // halka tampon (Float32Array) — son pencere RMS'leri
   let viFloorCap = 0;
   let viFloorHead = 0;
@@ -1309,34 +1317,38 @@
     viCalibEl.style.display = msg ? 'block' : 'none';
   }
 
-  function viCalibLoad() {
-    try {
-      const raw = localStorage.getItem(VI_CALIB_STORE_KEY);
-      if (!raw) return false;
-      const d = JSON.parse(raw);
-      if (!d || typeof d.floor !== 'number' || typeof d.absMin !== 'number') return false;
-      if (!d.at || (Date.now() - d.at) > VI_CALIB_TTL_MS) return false;
-      viNoiseFloor = Math.min(VI_FLOOR_MAX_RMS, Math.max(VI_FLOOR_MIN_RMS, d.floor));
-      viCalibAbsMin = d.absMin;
-      viCalibState = 'done';
-      console.info('VI: kayıtlı ortam kalibrasyonu kullanıldı — taban %s / alt eşik %s',
-                   viNoiseFloor.toFixed(4), viEffAbsMin().toFixed(4));
-      return true;
-    } catch (_) { return false; }   // localStorage kapalı/bozuk → yeniden ölç
+  // Sunucudaki KAYITLI ölçümü uygula (config.json'dan /api/config ile gelir).
+  // Ölçüm açılışta YAPILMAZ; yalnız bir kez yapılmış olanı yükleriz.
+  function viCalibApplySaved(floor, absMin) {
+    if (!(typeof floor === 'number' && floor > 0)) return false;
+    if (!(typeof absMin === 'number' && absMin > 0)) return false;
+    viNoiseFloor = Math.min(VI_FLOOR_MAX_RMS, Math.max(VI_FLOOR_MIN_RMS, floor));
+    viCalibAbsMin = absMin;
+    viFloorTarget = viNoiseFloor;   // canlı taban kayıtlı değerden devralsın
+    viCalibState = 'done';
+    console.info('VI: kayıtlı ortam kalibrasyonu uygulandı — taban %s / alt eşik %s',
+                 viNoiseFloor.toFixed(4), viEffAbsMin().toFixed(4));
+    return true;
   }
 
-  function viCalibSave() {
+  // Ölçüm sonucunu sunucuya bildir — orada config.json'a kalıcı yazılır ve
+  // KALIBRASYON.bat sonucu ekranda görür. Ağ hatası ölçümü geçersiz kılmaz
+  // (değerler bu oturumda zaten yürürlükte), yalnız kalıcı olmaz.
+  function viCalibReport(body) {
     try {
-      localStorage.setItem(VI_CALIB_STORE_KEY, JSON.stringify(
-        { floor: viNoiseFloor, absMin: viCalibAbsMin, at: Date.now() }));
-    } catch (_) { /* kalıcı yazamadık — bu oturumda yine de geçerli */ }
+      fetch('/api/kalibrasyon/sonuc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(Object.assign({ seq: viCalibSeq }, body)),
+      }).catch(() => {});
+    } catch (_) { /* sunucu yok — oturum içi geçerli kalır */ }
   }
 
-  // force=true (operatör 'k' tuşu): kayıtlı ölçümü yok say, yeniden ölç.
-  function viCalibStart(force) {
+  // Ölçümü BAŞLAT. Yalnız açık istekle çağrılır: ekranda 'k' tuşu ya da
+  // KALIBRASYON.bat'ın sunucuya bıraktığı istek (calib_seq değişimi).
+  function viCalibStart() {
     if (!VI.calibrationEnabled || !viActive) return;
     if (viCalibState === 'running') return;
-    if (!force && viCalibLoad()) return;
     viCalibState = 'running';
     viCalibSamples = [];
     viCalibStartAt = performance.now();
@@ -1381,6 +1393,7 @@
     // Canlı yüzdelik taban çalışmayı sürdürür — sistem yine de ortama uyar.
     console.warn('VI: ortam kalibrasyonu başarısız (%s) — config eşikleri + canlı taban kullanılacak', sebep);
     viShowHint('Ortam ölçümü yapılamadı — varsayılan ayarlarla devam');
+    viCalibReport({ ok: false, sebep: sebep });
   }
 
   function viCalibFinish() {
@@ -1400,10 +1413,13 @@
     viCalibState = 'done';
     viFloorReset();
     viFloorTarget = viNoiseFloor;   // canlı taban ölçülen değerden devralsın
-    viCalibSave();
     viCalibNotice('');
     console.info('VI: ortam kalibre edildi — medyan %s / p90 %s → taban %s, alt eşik %s',
                  p50.toFixed(4), p90.toFixed(4), viNoiseFloor.toFixed(4), viEffAbsMin().toFixed(4));
+    // Sunucuya bildir → config.json'a kalıcı yazılır, bir daha ölçüm gerekmez.
+    viCalibReport({ ok: true, floor: viNoiseFloor, abs_min: viCalibAbsMin,
+                    p50: p50, p90: p90 });
+    viShowHint('Ortam kalibre edildi — alt eşik ' + viEffAbsMin().toFixed(4));
   }
 
   function viMonitorTick() {
@@ -1626,12 +1642,17 @@
     if (viMonitorId) clearInterval(viMonitorId);
     viMonitorId = setInterval(viMonitorTick, 50);
     setMicWarn(false);   // açıldı → uyarıyı kaldır
-    // Ortam ölçümü: kayıtlı ve taze bir kalibrasyon varsa onu kullanır,
-    // yoksa calibMs boyunca sessiz ortamı dinleyip eşikleri kendi kurar.
+    // Açılışta ÖLÇÜM YAPILMAZ (sergi başlangıcında 4 sn sessizlik dayatmak
+    // kırılgandı). Yalnız daha önce KALIBRASYON.bat / 'k' ile ölçülüp
+    // config.json'a yazılmış değer varsa uygulanır; yoksa config eşikleriyle
+    // ve canlı yüzdelik tabanla çalışılır.
     if (VI.calibrationEnabled) {
-      viCalibState = 'none';
       viFloorReset();
-      viCalibStart(false);
+      if (!viCalibApplySaved(VI.calibFloor, VI.calibAbsMin)) {
+        viCalibState = 'none';
+        console.info('VI: kayıtlı ortam kalibrasyonu yok — config eşikleri kullanılıyor '
+                     + '(ölçmek için KALIBRASYON.bat ya da ekranda "k")');
+      }
     }
     console.info('VI: sürekli sesli giriş AÇIK');
     return true;
@@ -1690,17 +1711,42 @@
       if (typeof v.calib_max_rms === 'number') VI.calibMaxRms = v.calib_max_rms;
       if (typeof v.floor_window_ms === 'number') VI.floorWindowMs = v.floor_window_ms;
       if (typeof v.floor_pct === 'number') VI.floorPct = v.floor_pct;
+      // config.json'daki KAYITLI ölçüm (KALIBRASYON.bat yazdı) — açılışta uygulanır.
+      if (typeof v.calib_floor === 'number') VI.calibFloor = v.calib_floor;
+      if (typeof v.calib_abs_min === 'number') VI.calibAbsMin = v.calib_abs_min;
+      // Sayacın AÇILIŞ değerini kaydet: ilk yoklama "yeni istek var" sanmasın.
+      if (typeof v.calib_seq === 'number') viCalibSeq = v.calib_seq;
     } catch (e) {
       console.warn('VI: config alınamadı, varsayılanlar kullanılıyor', e);
     }
   }
 
-  // Aynı /api/config yanıtından test modu durumunu da al (rozet açılışta doğru olsun).
+  // Periyodik sunucu yoklaması (~10 sn). İki iş yapar:
+  //  • test modu rozetini senkron tutar (mod başka yerden değişmiş olabilir)
+  //  • KALIBRASYON.bat'ın bıraktığı ölçüm isteğini yakalar (calib_seq artmışsa
+  //    ortam ölçümünü başlatır). Bat'ın sonucu görmesi bu yüzden ~10 sn sürebilir.
   async function loadTestModeState() {
     try {
       const r = await fetch('/api/config');
       const d = await r.json();
       if (d && typeof d.test_mode === 'boolean') setTestBadge(d.test_mode);
+      const seq = d && d.voice_input && d.voice_input.calib_seq;
+      // YALNIZ ARTINCA tetikle. Sunucu yeniden baslarsa sayaç 0'a döner;
+      // "değişti" saymak sahte bir ölçüm başlatırdı — sessizce senkronla.
+      if (typeof seq === 'number' && seq < viCalibSeq) viCalibSeq = seq;
+      else if (typeof seq === 'number' && seq > viCalibSeq) {
+        viCalibSeq = seq;
+        if (!VI.calibrationEnabled) {
+          console.warn('VI: kalibrasyon isteği geldi ama config\'te kapalı');
+          viCalibReport({ ok: false, sebep: 'voice_input_calibration_enabled=false' });
+        } else if (!viActive) {
+          console.warn('VI: kalibrasyon isteği geldi ama mikrofon kapalı');
+          viCalibReport({ ok: false, sebep: 'sergi ekraninda mikrofon kapali (d tusu)' });
+        } else {
+          console.info('VI: KALIBRASYON.bat ölçüm istedi (seq=%d)', seq);
+          viCalibStart();
+        }
+      }
     } catch (_) { /* rozet kapalı kalır */ }
   }
 
@@ -2503,11 +2549,12 @@
       viDebugToggle();   // mikrofon seviye göstergesi (canlı RMS/eşik)
     }
     if (e.key === 'k' || e.key === 'K') {
-      // Ortam gürültüsünü YENİDEN ölç (salon doldu/boşaldı, mikrofon yeri değişti).
-      // Kayıtlı ölçüm yok sayılır; 4 sn sessizlik gerekir.
+      // Ortam gürültüsünü ölç (salon doldu/boşaldı, mikrofon yeri değişti).
+      // KALIBRASYON.bat ile AYNI işi yapar — operatör ekranın başındaysa kestirme.
+      // 4 sn sessizlik gerekir; sonuç config.json'a kalıcı yazılır.
       if (!VI.calibrationEnabled) viShowHint('Kalibrasyon config\'ten kapalı');
       else if (!viActive) viShowHint('Önce dinlemeyi açın (d)');
-      else viCalibStart(true);
+      else viCalibStart();
     }
     if (e.key === 'g' || e.key === 'G') {
       toggleTestModeFromDisplay();   // test modu: 2 oyun + sohbet kapalı
