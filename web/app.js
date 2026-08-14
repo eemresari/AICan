@@ -902,7 +902,22 @@
     bargeInMult: 2.2,       // TTS sırasında konuşma eşiği bu katsayıyla yükseltilir (echo artığı sayılmasın)
     bargeInMinMs: 280,      // barge-in için gereken sürekli yüksek-ses süresi
     holdDuringSpeech: true, // AI konuşurken kesme; söyleneni biriktir, AI bitince cevaba çevir
+    // ——— Ortam gürültüsü kalibrasyonu (aşağıdaki blokta anlatılıyor) ———
+    calibrationEnabled: true, // false → ESKİ davranış (EMA tabanı + elle ayarlı eşikler) birebir
+    calibMs: 4000,            // açılışta kaç ms sessiz ortam dinlenip ölçülecek
+    calibHeadroom: 1.35,      // kalibre alt eşik = ölçülen p90 * bu (tepe gürültü konuşma sayılmasın)
+    calibMaxRms: 0.08,        // ölçülen medyan bunu aşarsa kalibrasyon REDDEDİLİR (konuşuldu/mikrofon bozuk)
+    floorWindowMs: 15000,     // canlı gürültü tabanı penceresi
+    floorPct: 0.10,           // pencerenin en sessiz %10'u = ortam gürültüsü
   };
+  // Gürültü tabanının tırmanabileceği tavan: mikrofon arızası / sürekli uğultu
+  // eşiği sonsuza götürüp sistemi sağır etmesin.
+  const VI_FLOOR_MAX_RMS = 0.15;
+  const VI_FLOOR_MIN_RMS = 0.0004;
+  // Kalibrasyon sonucu bu kadar süre geçerli (tarayıcı yenilense de korunur).
+  // Sergi günü içinde tekrar ölçüm istemez; ortam değişince operatör 'k' ile yeniler.
+  const VI_CALIB_TTL_MS = 12 * 3600 * 1000;
+  const VI_CALIB_STORE_KEY = 'aican_vi_calib_v1';
   // AI konuşması biterken biriken kaydın başındaki yankı/sessizlik sunucuda
   // kırpılır (trim_ms). Bu sabit, yankı-yalnız kaydın en fazla ne kadar
   // birikeceğini sınırlar: kayıt bu yaştan eskiyse tazelenir (blob küçük kalsın).
@@ -937,6 +952,42 @@
   let viTtsRecent = [];          // son çalınan 1-2 TTS metni (yankı filtresi referansı)
   let viHintEl = null;           // "duyamadım" geçici bildirimi
   let viHintLastAt = 0;
+
+  // ——— ORTAM GÜRÜLTÜSÜ: KALİBRASYON + CANLI TABAN ————————————————————
+  // Konuşma eşiği ortamın kendi gürültüsüne göre kayar (baseThr). Bunu iki
+  // mekanizma besler:
+  //
+  //  1) AÇILIŞ KALİBRASYONU (viCalib*): mikrofon açılınca calibMs kadar
+  //     KİMSE KONUŞMADAN ortam dinlenir. Ölçümün medyanı başlangıç gürültü
+  //     tabanı, p90'ı ise (calibHeadroom ile) MUTLAK ALT EŞİK olur. Böylece
+  //     salonun klima/kalabalık uğultusu "konuşma" sayılmaz ve sahada
+  //     abs_min_rms'i elle kısma ihtiyacı kalkar. Sonuç localStorage'a yazılır
+  //     (VI_CALIB_TTL_MS boyunca geçerli); operatör 'k' ile yeniden ölçtürür.
+  //     Config'ten gelen abs_min_rms ALT SINIR olarak korunur — kalibrasyon
+  //     eşiği yalnız YÜKSELTEBİLİR, asla elle ayarlanandan gevşetmez.
+  //
+  //  2) CANLI TABAN (viFloor*): son floorWindowMs'lik RMS penceresinin en
+  //     sessiz %10'u (yüzdelik). Bu, eski EMA'nın yerine geçer. EMA yalnız
+  //     "sessiz" sayılan tick'lerde güncellendiğinden GÜRÜLTÜLÜ ORTAMDA KİLİTLENİYORDU:
+  //     ortam başlangıç tahmininin (0.01) üstündeyse her tick "konuşma" sayılır,
+  //     taban hiç güncellenmez, sistem sonsuza dek boş kayıt gönderirdi. Yüzdelik
+  //     her tick'te (TTS çalarken hariç — hoparlör yankısı tabanı şişirir) güncellenir;
+  //     kişi konuşurken bile hecelerin arası pencerenin alt %10'unu doldurur.
+  //     Kalibrasyon reddedilse bile bu katman ortamı yakalamayı sürdürür.
+  //
+  // calibrationEnabled=false → her iki mekanizma da devre dışı, eski EMA yolu
+  // birebir çalışır (sergi günü tek anahtarla geri dönüş).
+  let viCalibState = 'none';     // 'none' | 'running' | 'done' | 'failed'
+  let viCalibSamples = [];
+  let viCalibStartAt = 0;
+  let viCalibAbsMin = 0;         // kalibrasyondan gelen mutlak alt eşik (0 = yok)
+  let viCalibEl = null;          // "ortam ölçülüyor" ekran bildirimi
+  let viFloorBuf = null;         // halka tampon (Float32Array) — son pencere RMS'leri
+  let viFloorCap = 0;
+  let viFloorHead = 0;
+  let viFloorLen = 0;
+  let viFloorTick = 0;           // yüzdelik hesabı için tick sayacı
+  let viFloorTarget = 0;         // en son hesaplanan yüzdelik hedefi
 
   // Oyun modunda (drvGamePhase dolu) tek-kelime cevap beklenir; "cümle bitti"
   // ve "yeterince konuştu" eşiklerini kısaltmak tur başına ~400 ms gecikme
@@ -999,6 +1050,9 @@
       + '<br>rms ' + (rms == null ? '—' : rms.toFixed(4))
       + ' / eşik ' + (thr == null ? '—' : thr.toFixed(4))
       + ' / taban ' + viNoiseFloor.toFixed(4)
+      + '<br>kalib ' + (VI.calibrationEnabled ? viCalibState : 'kapalı')
+      + ' · alt eşik ' + viEffAbsMin().toFixed(4)
+      + (viCalibAbsMin ? ' (ölçüm)' : ' (config)')
       + '<div style="position:relative;height:8px;margin-top:4px;background:#123;border-radius:3px;">'
       +   '<div style="position:absolute;left:0;top:0;bottom:0;width:' + pct + '%;'
       +     'background:' + ((rms || 0) > (thr || 1) ? '#4f8' : '#29f') + ';border-radius:3px;"></div>'
@@ -1200,6 +1254,158 @@
     }
   }
 
+  // Yürürlükteki mutlak alt eşik: config'ten gelen değer ile kalibrasyonun
+  // bulduğunun BÜYÜĞÜ. Kalibrasyon yoksa/reddedildiyse davranış eskisi gibi.
+  function viEffAbsMin() {
+    return Math.max(VI.absMinRms, viCalibAbsMin);
+  }
+
+  // Bir dizinin q'uncu yüzdeliği (dizi SIRALI gelmeli).
+  function viPct(sorted, q) {
+    if (!sorted.length) return 0;
+    return sorted[Math.min(sorted.length - 1, Math.max(0, Math.floor(sorted.length * q)))];
+  }
+
+  function viFloorReset() {
+    viFloorCap = Math.max(40, Math.round(VI.floorWindowMs / 50));   // tick 50 ms
+    viFloorBuf = new Float32Array(viFloorCap);
+    viFloorHead = 0; viFloorLen = 0; viFloorTick = 0; viFloorTarget = 0;
+  }
+
+  // Canlı gürültü tabanı: pencereye örnek ekle, yüzdelik hedefe doğru yumuşat.
+  function viFloorPush(rms) {
+    if (!viFloorBuf) viFloorReset();
+    viFloorBuf[viFloorHead] = rms;
+    viFloorHead = (viFloorHead + 1) % viFloorCap;
+    if (viFloorLen < viFloorCap) viFloorLen++;
+    // Yüzdelik 500 ms'de bir hesaplanır — her tick sıralamak gereksiz.
+    if (++viFloorTick >= 10 && viFloorLen >= 40) {
+      viFloorTick = 0;
+      // TypedArray.sort() varsayılan olarak SAYISAL sıralar (Array'in aksine).
+      viFloorTarget = viPct(viFloorBuf.slice(0, viFloorLen).sort(), VI.floorPct);
+    }
+    if (viFloorTarget > 0) {
+      // Yükselirken hızlı uy (ortam gürültülendi, hemen sağırlaşma), düşerken
+      // yavaş in (anlık sessizlik eşiği dibe çekip gürültüyü konuşma sandırmasın).
+      const k = viFloorTarget > viNoiseFloor ? 0.20 : 0.06;
+      viNoiseFloor += (viFloorTarget - viNoiseFloor) * k;
+    }
+    viNoiseFloor = Math.min(VI_FLOOR_MAX_RMS, Math.max(VI_FLOOR_MIN_RMS, viNoiseFloor));
+  }
+
+  // Kalibrasyon sırasında ekranda görünen bildirim (ziyaretçi/operatör sussun).
+  function viCalibNotice(msg) {
+    if (!viCalibEl) {
+      if (!msg) return;
+      viCalibEl = document.createElement('div');
+      viCalibEl.style.cssText =
+        'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:70;' +
+        'pointer-events:none;padding:10px 20px;border-radius:12px;' +
+        'background:rgba(0,0,0,0.78);border:1px solid rgba(120,220,255,0.45);' +
+        'font:600 16px/1.4 system-ui,sans-serif;color:#cfeaff;text-align:center;';
+      document.body.appendChild(viCalibEl);
+    }
+    viCalibEl.textContent = msg || '';
+    viCalibEl.style.display = msg ? 'block' : 'none';
+  }
+
+  function viCalibLoad() {
+    try {
+      const raw = localStorage.getItem(VI_CALIB_STORE_KEY);
+      if (!raw) return false;
+      const d = JSON.parse(raw);
+      if (!d || typeof d.floor !== 'number' || typeof d.absMin !== 'number') return false;
+      if (!d.at || (Date.now() - d.at) > VI_CALIB_TTL_MS) return false;
+      viNoiseFloor = Math.min(VI_FLOOR_MAX_RMS, Math.max(VI_FLOOR_MIN_RMS, d.floor));
+      viCalibAbsMin = d.absMin;
+      viCalibState = 'done';
+      console.info('VI: kayıtlı ortam kalibrasyonu kullanıldı — taban %s / alt eşik %s',
+                   viNoiseFloor.toFixed(4), viEffAbsMin().toFixed(4));
+      return true;
+    } catch (_) { return false; }   // localStorage kapalı/bozuk → yeniden ölç
+  }
+
+  function viCalibSave() {
+    try {
+      localStorage.setItem(VI_CALIB_STORE_KEY, JSON.stringify(
+        { floor: viNoiseFloor, absMin: viCalibAbsMin, at: Date.now() }));
+    } catch (_) { /* kalıcı yazamadık — bu oturumda yine de geçerli */ }
+  }
+
+  // force=true (operatör 'k' tuşu): kayıtlı ölçümü yok say, yeniden ölç.
+  function viCalibStart(force) {
+    if (!VI.calibrationEnabled || !viActive) return;
+    if (viCalibState === 'running') return;
+    if (!force && viCalibLoad()) return;
+    viCalibState = 'running';
+    viCalibSamples = [];
+    viCalibStartAt = performance.now();
+    viCalibAbsMin = 0;                 // ölçüm bitene dek config eşiği geçerli
+    viFloorReset();
+    // Ölçüm boyunca kayıt açılmasın (mikrofon yalnız dinliyor).
+    viHoldUntil = viCalibStartAt + VI.calibMs + 300;
+    if (viRec && viRec.state === 'recording') viStopRecorder('discard');
+    viSetListeningBadge(false);
+    console.info('VI: ortam gürültüsü ölçülüyor (%d ms)', VI.calibMs);
+  }
+
+  // Her tick'te kalibrasyon adımı. true dönerse çağıran tick'i BİTİRİR
+  // (ölçüm sürerken kayıt/VAD işletilmez).
+  function viCalibStep(rms, now) {
+    if (viCalibState !== 'running') return false;
+    // TTS çalıyorsa ölçüm hoparlörün kendi sesini "ortam" sanır: örnek alma,
+    // pencereyi kaydır. (Açılışta normalde ses çalmaz; güvenlik önlemi.)
+    if (stSpeaking) {
+      viCalibStartAt = now;
+      viCalibSamples = [];
+      viCalibNotice('🎤 Ortam ölçümü bekliyor (ses çalıyor)…');
+      return true;
+    }
+    viCalibSamples.push(rms);
+    const elapsed = now - viCalibStartAt;
+    const left = Math.max(0, Math.ceil((VI.calibMs - elapsed) / 1000));
+    viCalibNotice('🎤 Ortam sesi ölçülüyor — lütfen sessiz olun… ' + left);
+    viDebugUpdate('KALİBRASYON (' + viCalibSamples.length + ' örnek)', rms, null);
+    // Süre dolduysa ve yeterli örnek varsa bitir. AudioContext askıya alınıp
+    // örnek toplanamadıysa süre uzar; 3 katı aşılırsa başarısız sayılır.
+    if (elapsed >= VI.calibMs && viCalibSamples.length >= 40) { viCalibFinish(); return true; }
+    if (elapsed >= VI.calibMs * 3) { viCalibFail('yeterli ölçüm alınamadı'); return true; }
+    return true;
+  }
+
+  function viCalibFail(sebep) {
+    viCalibSamples = [];
+    viCalibAbsMin = 0;              // config'teki elle ayarlı eşiğe dön
+    viCalibState = 'failed';
+    viCalibNotice('');
+    // Canlı yüzdelik taban çalışmayı sürdürür — sistem yine de ortama uyar.
+    console.warn('VI: ortam kalibrasyonu başarısız (%s) — config eşikleri + canlı taban kullanılacak', sebep);
+    viShowHint('Ortam ölçümü yapılamadı — varsayılan ayarlarla devam');
+  }
+
+  function viCalibFinish() {
+    const s = viCalibSamples.slice().sort((a, b) => a - b);
+    viCalibSamples = [];
+    const p50 = viPct(s, 0.50);
+    const p90 = viPct(s, 0.90);
+    // Ölçüm boyunca konuşulduysa / mikrofon bozuksa medyan fırlar. Böyle bir
+    // ölçüyü KABUL ETMEK eşiği tavana çakıp sistemi sağır ederdi — reddet.
+    if (p50 > VI.calibMaxRms) {
+      viCalibFail('ortam çok gürültülü ya da ölçüm sırasında konuşuldu (medyan '
+                  + p50.toFixed(4) + ')');
+      return;
+    }
+    viNoiseFloor = Math.min(VI_FLOOR_MAX_RMS, Math.max(VI_FLOOR_MIN_RMS, p50));
+    viCalibAbsMin = p90 * VI.calibHeadroom;
+    viCalibState = 'done';
+    viFloorReset();
+    viFloorTarget = viNoiseFloor;   // canlı taban ölçülen değerden devralsın
+    viCalibSave();
+    viCalibNotice('');
+    console.info('VI: ortam kalibre edildi — medyan %s / p90 %s → taban %s, alt eşik %s',
+                 p50.toFixed(4), p90.toFixed(4), viNoiseFloor.toFixed(4), viEffAbsMin().toFixed(4));
+  }
+
   function viMonitorTick() {
     if (!viActive || !viAnalyser) return;
     // KRİTİK: AudioContext askıdaysa (arka plan sekmesi / autoplay politikası)
@@ -1220,7 +1426,16 @@
     let sum = 0;
     for (let i = 0; i < viData.length; i++) sum += viData[i] * viData[i];
     const rms = Math.sqrt(sum / viData.length);
-    const baseThr = Math.max(VI.absMinRms, viNoiseFloor * VI.onsetMult);
+
+    // ——— Ortam kalibrasyonu / canlı gürültü tabanı ———
+    // Ölçüm sürerken tick BURADA biter: kayıt açılmaz, VAD işletilmez.
+    if (viCalibStep(rms, now)) return;
+    // Canlı taban her tick güncellenir — TTS çalarken HARİÇ (hoparlör yankısı
+    // tabanı şişirir). Konuşma sürerken de güncellenir: yüzdelik buna dayanıklı,
+    // eski EMA'nın gürültülü ortamdaki kilitlenmesi böyle kırılır.
+    if (VI.calibrationEnabled && !stSpeaking) viFloorPush(rms);
+
+    const baseThr = Math.max(viEffAbsMin(), viNoiseFloor * VI.onsetMult);
 
     // SERT KAPI: yalnızca AI DÜŞÜNÜRKEN (sunucu meşgul, çalan ses YOK) → kaydı at.
     if (stThinking) {
@@ -1314,7 +1529,8 @@
     if (!viRec || viRec.state !== 'recording') {
       viSetListeningBadge(true);
       if (!viStopping && now >= viHoldUntil) viStartRecorder();
-      if (!loud) viNoiseFloor = viNoiseFloor * 0.95 + rms * 0.05;  // gürültü tabanı
+      // ESKİ yol (calibrationEnabled=false): yalnız sessiz tick'lerde EMA.
+      if (!VI.calibrationEnabled && !loud) viNoiseFloor = viNoiseFloor * 0.95 + rms * 0.05;
       return;
     }
 
@@ -1322,8 +1538,8 @@
       viLastLoudAt = now;
       if (!viHadSpeech) viSpeechStartAt = now;
       viHadSpeech = true;
-    } else if (!viHadSpeech) {
-      viNoiseFloor = viNoiseFloor * 0.95 + rms * 0.05;             // hâlâ sessizken taban
+    } else if (!viHadSpeech && !VI.calibrationEnabled) {
+      viNoiseFloor = viNoiseFloor * 0.95 + rms * 0.05;             // ESKİ yol: hâlâ sessizken taban
     }
 
     // ANLIK SELAM (test modu, panelsiz): boştayken ses duyulur duyulmaz —
@@ -1410,6 +1626,13 @@
     if (viMonitorId) clearInterval(viMonitorId);
     viMonitorId = setInterval(viMonitorTick, 50);
     setMicWarn(false);   // açıldı → uyarıyı kaldır
+    // Ortam ölçümü: kayıtlı ve taze bir kalibrasyon varsa onu kullanır,
+    // yoksa calibMs boyunca sessiz ortamı dinleyip eşikleri kendi kurar.
+    if (VI.calibrationEnabled) {
+      viCalibState = 'none';
+      viFloorReset();
+      viCalibStart(false);
+    }
     console.info('VI: sürekli sesli giriş AÇIK');
     return true;
   }
@@ -1422,6 +1645,8 @@
     if (viStream) { for (const t of viStream.getTracks()) { try { t.stop(); } catch (_) {} } viStream = null; }
     if (viCtx) { try { viCtx.close(); } catch (_) {} viCtx = null; }
     viAnalyser = null; viData = null;
+    if (viCalibState === 'running') viCalibState = 'none';   // yarım ölçüm sayılmasın
+    viCalibNotice('');
     viSetListeningBadge(false);
     console.info('VI: sürekli sesli giriş KAPALI');
   }
@@ -1459,6 +1684,12 @@
       if (typeof v.barge_in_mult === 'number') VI.bargeInMult = v.barge_in_mult;
       if (typeof v.barge_in_min_ms === 'number') VI.bargeInMinMs = v.barge_in_min_ms;
       if (typeof v.hold_during_speech === 'boolean') VI.holdDuringSpeech = v.hold_during_speech;
+      if (typeof v.calibration_enabled === 'boolean') VI.calibrationEnabled = v.calibration_enabled;
+      if (typeof v.calib_ms === 'number') VI.calibMs = v.calib_ms;
+      if (typeof v.calib_headroom === 'number') VI.calibHeadroom = v.calib_headroom;
+      if (typeof v.calib_max_rms === 'number') VI.calibMaxRms = v.calib_max_rms;
+      if (typeof v.floor_window_ms === 'number') VI.floorWindowMs = v.floor_window_ms;
+      if (typeof v.floor_pct === 'number') VI.floorPct = v.floor_pct;
     } catch (e) {
       console.warn('VI: config alınamadı, varsayılanlar kullanılıyor', e);
     }
@@ -2270,6 +2501,13 @@
     }
     if (e.key === 'm' || e.key === 'M') {
       viDebugToggle();   // mikrofon seviye göstergesi (canlı RMS/eşik)
+    }
+    if (e.key === 'k' || e.key === 'K') {
+      // Ortam gürültüsünü YENİDEN ölç (salon doldu/boşaldı, mikrofon yeri değişti).
+      // Kayıtlı ölçüm yok sayılır; 4 sn sessizlik gerekir.
+      if (!VI.calibrationEnabled) viShowHint('Kalibrasyon config\'ten kapalı');
+      else if (!viActive) viShowHint('Önce dinlemeyi açın (d)');
+      else viCalibStart(true);
     }
     if (e.key === 'g' || e.key === 'G') {
       toggleTestModeFromDisplay();   // test modu: 2 oyun + sohbet kapalı

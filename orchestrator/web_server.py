@@ -920,6 +920,25 @@ def create_app(config: dict) -> Flask:
                 "echo_cancellation": bool(config.get("voice_input_echo_cancellation", True)),
                 "noise_suppression": bool(config.get("voice_input_noise_suppression", True)),
                 "auto_gain": bool(config.get("voice_input_auto_gain", True)),
+                # ——— Ortam gurultusu kalibrasyonu ———
+                # calibration_enabled=true: mikrofon acilinca calib_ms boyunca
+                # KIMSE KONUSMADAN ortam dinlenir; olcumun medyani gurultu tabani,
+                # p90'i (calib_headroom ile) MUTLAK ALT ESIK olur. Boylece salonun
+                # ugultusu konusma sayilmaz ve abs_min_rms'i sahada elle kismak
+                # gerekmez. abs_min_rms yine ALT SINIR: kalibrasyon esigi yalnizca
+                # yukseltebilir. Ayrica canli gurultu tabani EMA yerine yuzdelik
+                # ile izlenir (gurultulu ortamda EMA kilitleniyordu). false yapmak
+                # ESKI davranisi birebir geri getirir.
+                "calibration_enabled": bool(config.get("voice_input_calibration_enabled", True)),
+                "calib_ms": int(config.get("voice_input_calib_ms", 4000)),
+                "calib_headroom": float(config.get("voice_input_calib_headroom", 1.35)),
+                # Olculen medyan bunu asarsa kalibrasyon REDDEDILIR (olcum sirasinda
+                # konusuldu / mikrofon bozuk): config esikleri + canli taban devreye girer.
+                "calib_max_rms": float(config.get("voice_input_calib_max_rms", 0.08)),
+                # Canli taban: son floor_window_ms'lik pencerenin en sessiz
+                # floor_pct'lik dilimi ortam gurultusu sayilir.
+                "floor_window_ms": int(config.get("voice_input_floor_window_ms", 15000)),
+                "floor_pct": float(config.get("voice_input_floor_pct", 0.10)),
             },
         })
 
