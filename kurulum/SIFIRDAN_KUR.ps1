@@ -71,7 +71,11 @@ if (Get-Command git -ErrorAction SilentlyContinue) {
     Olumlu ("Zaten kurulu: " + (git --version))
 } else {
     Bilgi "Kuruluyor (winget)..."
-    winget install -e --id Git.Git --accept-source-agreements --accept-package-agreements
+    winget install -e --id Git.Git --source winget --accept-source-agreements --accept-package-agreements
+    if ($LASTEXITCODE -ne 0) {
+        Uyari "Git kurulumu basarisiz oldu. Yukaridaki winget hatasina bakin."
+        exit 1
+    }
     # winget yeni PATH'i BU pencereye yansitmaz — makine+kullanici PATH'ini tazele.
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                 [Environment]::GetEnvironmentVariable("Path", "User")
@@ -89,7 +93,12 @@ if (Get-Command python -ErrorAction SilentlyContinue) {
     Olumlu ("Zaten kurulu: " + (python --version))
 } else {
     Bilgi "Kuruluyor (winget)..."
-    winget install -e --id Python.Python.3.13 --accept-source-agreements --accept-package-agreements
+    winget install -e --id Python.Python.3.13 --source winget --accept-source-agreements --accept-package-agreements
+    if ($LASTEXITCODE -ne 0) {
+        Uyari "Python kurulumu basarisiz oldu. Yukaridaki winget hatasina bakin."
+        Bilgi "Elle kurulum: https://www.python.org/downloads/ (Add python.exe to PATH secilmeli)"
+        exit 1
+    }
     $env:Path = [Environment]::GetEnvironmentVariable("Path", "Machine") + ";" +
                 [Environment]::GetEnvironmentVariable("Path", "User")
     if (-not (Get-Command python -ErrorAction SilentlyContinue)) {

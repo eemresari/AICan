@@ -668,6 +668,19 @@
         return;
       }
       const txt = (data.text || '').trim();
+      if (data.warning === 'blocked') {
+        // Yasaklı söz: metin sunucudan hiç gelmedi. Kutuya yazılmaz, sergiye
+        // yalnız "anlamadım" repliği gider (uyarı/sansür mesajı YOK).
+        setMicStatus('anlaşılmadı — tekrar dene', 'error');
+        log('sys', 'yasaklı girdi engellendi (ekrana yazılmadı)');
+        sendToDisplay({
+          type: 'ai_reply',
+          jest_id: data.jest_id || 'anlamadim',
+          yanit: data.yanit || 'Anlamadım, başka bir şey söyler misin?',
+          yogunluk: data.yogunluk || 0.6,
+        });
+        return;
+      }
       if (!txt) {
         setMicStatus('anlaşılmadı — tekrar dene', 'error');
         return;
@@ -701,7 +714,7 @@
     try {
       const r = await fetch('/api/emoji_manifest');
       const data = await r.json();
-      if (panel) panel.setEmojiManifest(data.frames || {}, data.fps || 12);
+      if (panel) panel.setEmojiManifest(data.frames || {}, data.fps || 12, data.varyantlar || null);
     } catch (e) {
       log('sys', 'emoji manifest yuklenemedi: ' + e.message);
     }
@@ -792,12 +805,49 @@
   }
 
   // ——— Gercek backend cagirisi ——————————————————————
+  // Yasaklı kelime filtresi (sunucu tek kaynak): söz sergi ekranına YAZILMADAN
+  // önce sorulur. Ağ hatasında engellemez — sunucu tarafı /api/send ve
+  // /api/game/input'ta zaten ikinci kapıdır.
+  async function filterCheck(text) {
+    try {
+      const r = await fetch('/api/filter_check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text }),
+      });
+      return await r.json();
+    } catch (_) {
+      return null;
+    }
+  }
+
   async function handleSend() {
     const text = (els.prompt.value || '').trim();
     if (!text) return;
     noteActivity();
     if (text.length > MAX_CHARS) {
       log('sys', 'iptal: prompt ' + text.length + ' / ' + MAX_CHARS + ' karakter sınırını aşıyor');
+      return;
+    }
+
+    // Yasaklı girdi: sergiye ne metin ne uyarı gider — yalnız "anlamadım".
+    // (Sesli yolda /api/transcribe zaten keser; burası panel/yazı kapısı.)
+    const flt = await filterCheck(text);
+    if (flt && flt.blocked) {
+      els.prompt.value = '';
+      updateCharCount();
+      log('sys', 'yasaklı girdi engellendi (ekrana yazılmadı)');
+      sendToDisplay({
+        type: 'ai_reply',
+        jest_id: flt.jest_id || 'anlamadim',
+        yanit: flt.yanit || 'Anlamadım, başka bir şey söyler misin?',
+        yogunluk: flt.yogunluk || 0.6,
+      });
+      if (els.aiResponse) {
+        els.aiResponse.textContent = flt.yanit || '';
+        els.aiResponse.classList.remove('empty');
+      }
+      els.prompt.focus();
       return;
     }
 

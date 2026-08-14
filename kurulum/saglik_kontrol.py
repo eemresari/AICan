@@ -123,6 +123,8 @@ def kontrol_dosyalar() -> None:
         "web/AI_Body_v2.html", "web/Kontrol_Paneli.html",
         "web/app.js", "web/control.js", "web/led-panel.js",
         "ai/system_prompt.txt", "ai/gestures.json",
+        "ai/yasakli_kelimeler_tr_en.json", "orchestrator/yasakli_filtre.py",
+        "orchestrator/turkce_morf.py",
     ]
     eksik = [d for d in gerekli if not (ROOT / d).is_file()]
     if eksik:
@@ -175,6 +177,47 @@ def kontrol_veri() -> None:
             yaz("HATA", f"{yol} yok")
         except (ValueError, OSError) as e:
             yaz("HATA", f"{yol} okunamadı: {e}")
+
+
+def kontrol_yasakli(cfg: dict) -> None:
+    """Yasakli kelime filtresi gercekten yukleniyor mu?
+
+    Liste eksik/bozuksa filtre sessizce devre disi kalir ve sergide kufur
+    EKRANA YAZILIR — bu yuzden HATA seviyesinde raporlanir."""
+    if cfg and cfg.get("yasakli_filtre_enabled") is False:
+        yaz("UYARI", "yasaklı kelime filtresi config'te KAPALI "
+                     "(yasakli_filtre_enabled=false) — küfür ekrana yazılır")
+        return
+    sys.path.insert(0, str(ORCH))
+    try:
+        import yasakli_filtre  # noqa: PLC0415 — istege bagli tanilama
+        rel = (cfg or {}).get("yasakli_liste_path")
+        yol = (ORCH / rel).resolve() if rel else None
+        f = yasakli_filtre.YasakliFiltre(yol=yol, ek_guard=yasakli_filtre.SERGI_GUARD)
+        if not f.hazir:
+            yaz("HATA", f"yasaklı kelime listesi yüklenemedi ({f.hata}) — "
+                        f"filtre çalışmaz, küfür ekrana yazılır")
+        elif f.terim_sayisi < 1000:
+            yaz("UYARI", f"yasaklı kelime listesi küçük ({f.terim_sayisi} terim)")
+        elif f.kontrol("siktir git") is None:
+            yaz("HATA", "yasaklı kelime filtresi örnek küfrü YAKALAMADI")
+        elif f.kontrol("aptalsın sen") is None:
+            yaz("HATA", "yasaklı kelime filtresi ÇEKİMLİ hakareti YAKALAMADI "
+                        "(ek soyma bozuk)")
+        elif f.kontrol("mezhebe göre") is None:
+            # Cekim uretimi (turkce_morf) calismiyorsa notr konu terimleri
+            # yalniz TAM yazildiginda yakalanir; sahada kacagin buyuk kismi
+            # buradan geliyordu.
+            yaz("UYARI", "çekim üretimi çalışmıyor — yasak konular yalnızca "
+                         "tam yazıldığında yakalanır (yasakli_uretim?)")
+        elif f.kontrol("araba kullanıyorum") is not None:
+            yaz("HATA", "yasaklı kelime filtresi GÜNLÜK kelimeyi engelledi "
+                        "(üretim budaması bozuk) — sergi kilitlenir")
+        else:
+            yaz("PASS", f"yasaklı kelime filtresi: {f.terim_sayisi} terim + "
+                        f"{len(f.uretilmis)} çekim")
+    except Exception as e:  # noqa: BLE001
+        yaz("HATA", f"yasaklı kelime filtresi çalıştırılamadı: {e}")
 
 
 def config_yukle() -> dict:
@@ -234,7 +277,7 @@ def kontrol_ollama_gpu(url: str, model: str) -> None:
         if vram == 0:
             yaz("HATA", "model CPU'da çalışıyor (size_vram=0) — cevaplar çok yavaş. "
                         "NVIDIA sürücüsünü ve Ollama'yı güncelleyin "
-                        "(winget upgrade -e --id Ollama.Ollama)")
+                        "(winget upgrade -e --id Ollama.Ollama --source winget)")
         elif vram < toplam * 0.9:
             yaz("UYARI", f"modelin yalnızca %{100 * vram // toplam}'i GPU'da — "
                          f"katmanlar CPU'ya taşmış, cevaplar yavaşlar")
@@ -341,6 +384,7 @@ def main() -> int:
     kontrol_dosyalar()
     kontrol_veri()
     cfg = config_yukle()
+    kontrol_yasakli(cfg)
     kontrol_gpu(cfg)
     if cfg:
         kontrol_piper(cfg)

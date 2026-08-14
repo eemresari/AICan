@@ -32,7 +32,12 @@
         "rüyam gerceklesti"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f604"
+      "emoji_kaynak": "1f604",
+      "emoji_varyantlar": [
+        "1f601",
+        "1f606",
+        "1f389"
+      ]
     },
     {
       "id": "mutluluk_sakin",
@@ -60,7 +65,12 @@
         "hoşuma gitti"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f642"
+      "emoji_kaynak": "1f642",
+      "emoji_varyantlar": [
+        "1f60a",
+        "263a_fe0f",
+        "1f60c"
+      ]
     },
     {
       "id": "sevgi",
@@ -92,7 +102,12 @@
         "ailemi ozledim"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "2764_fe0f"
+      "emoji_kaynak": "2764_fe0f",
+      "emoji_varyantlar": [
+        "1f970",
+        "1f496",
+        "1f60d"
+      ]
     },
     {
       "id": "hayranlik",
@@ -124,7 +139,12 @@
         "manzara harikaydi"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f929"
+      "emoji_kaynak": "1f929",
+      "emoji_varyantlar": [
+        "2728",
+        "1f31f",
+        "1f4ab"
+      ]
     },
     {
       "id": "nese",
@@ -156,7 +176,12 @@
         "icim kipir kipir"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f603"
+      "emoji_kaynak": "1f603",
+      "emoji_varyantlar": [
+        "1f600",
+        "1f643",
+        "1f38a"
+      ]
     },
     {
       "id": "kahkaha",
@@ -189,7 +214,11 @@
         "cok guldum"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f923"
+      "emoji_kaynak": "1f923",
+      "emoji_varyantlar": [
+        "1f602",
+        "1f639"
+      ]
     },
     {
       "id": "huzur",
@@ -248,7 +277,12 @@
         "tesekkur ederim"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f917"
+      "emoji_kaynak": "1f917",
+      "emoji_varyantlar": [
+        "1fac2",
+        "1f91d",
+        "1f49b"
+      ]
     },
     {
       "id": "gurur",
@@ -276,7 +310,12 @@
         "uzun emek karsiligi"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f4aa"
+      "emoji_kaynak": "1f4aa",
+      "emoji_varyantlar": [
+        "1f3c6",
+        "1f44f",
+        "1f947"
+      ]
     },
     {
       "id": "uzgun_yavas",
@@ -304,7 +343,11 @@
         "iyi degilim"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f614"
+      "emoji_kaynak": "1f614",
+      "emoji_varyantlar": [
+        "1f641",
+        "1f625"
+      ]
     },
     {
       "id": "uzgun_derin",
@@ -332,7 +375,12 @@
         "umutsuzum"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f622"
+      "emoji_kaynak": "1f622",
+      "emoji_varyantlar": [
+        "1f62d",
+        "1f494",
+        "2639_fe0f"
+      ]
     },
     {
       "id": "yalniz",
@@ -360,7 +408,12 @@
         "konusacak biri yok"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f61e"
+      "emoji_kaynak": "1f61e",
+      "emoji_varyantlar": [
+        "1f97a",
+        "1f63f",
+        "1f327_fe0f"
+      ]
     },
     {
       "id": "hayal_kirikligi",
@@ -388,7 +441,12 @@
         "yarim kaldi"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f61f"
+      "emoji_kaynak": "1f61f",
+      "emoji_varyantlar": [
+        "1f629",
+        "1f612",
+        "1f62e_200d_1f4a8"
+      ]
     },
     {
       "id": "korku",
@@ -416,7 +474,11 @@
         "icim daraliyor"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f628"
+      "emoji_kaynak": "1f628",
+      "emoji_varyantlar": [
+        "1f630",
+        "1f627"
+      ]
     },
     {
       "id": "panik",
@@ -448,7 +510,12 @@
         "kontrolum yok"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f631"
+      "emoji_kaynak": "1f631",
+      "emoji_varyantlar": [
+        "1f92f",
+        "1f635",
+        "1f626"
+      ]
     },
     {
       "id": "ofke",
@@ -480,7 +547,11 @@
         "yapmayin boyle"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f620"
+      "emoji_kaynak": "1f620",
+      "emoji_varyantlar": [
+        "1f621",
+        "1f624"
+      ]
     },
     {
       "id": "sikilma",
@@ -508,7 +579,12 @@
         "zaman gecmiyor"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f971"
+      "emoji_kaynak": "1f971",
+      "emoji_varyantlar": [
+        "1f634",
+        "1f644",
+        "1f62a"
+      ]
     },
     {
       "id": "saskinlik",
@@ -540,7 +616,12 @@
         "hic dusunmemistim"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f632"
+      "emoji_kaynak": "1f632",
+      "emoji_varyantlar": [
+        "1f62e",
+        "1f62f",
+        "1f633"
+      ]
     },
     {
       "id": "merak",
@@ -572,7 +653,12 @@
         "daha fazla soyle"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f914"
+      "emoji_kaynak": "1f914",
+      "emoji_varyantlar": [
+        "1f9d0",
+        "1f440",
+        "1f4a1"
+      ]
     },
     {
       "id": "dusunce",
@@ -658,7 +744,11 @@
         "dogru"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "2705"
+      "emoji_kaynak": "2705",
+      "emoji_varyantlar": [
+        "1f44c",
+        "1f197"
+      ]
     },
     {
       "id": "onayla_sicak",
@@ -690,7 +780,12 @@
         "memnuniyetle"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f44d"
+      "emoji_kaynak": "1f44d",
+      "emoji_varyantlar": [
+        "1f64c",
+        "270c_fe0f",
+        "1f91f"
+      ]
     },
     {
       "id": "reddet_net",
@@ -718,7 +813,11 @@
         "kabul edemem"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "274c"
+      "emoji_kaynak": "274c",
+      "emoji_varyantlar": [
+        "1f6d1",
+        "1f44e"
+      ]
     },
     {
       "id": "reddet_yumusak",
@@ -835,7 +934,11 @@
         "hangisini kastettin"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "2753"
+      "emoji_kaynak": "2753",
+      "emoji_varyantlar": [
+        "1f928",
+        "2049_fe0f"
+      ]
     },
     {
       "id": "dinliyorum",
@@ -863,7 +966,11 @@
         "seni duyuyorum"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f442"
+      "emoji_kaynak": "1f442",
+      "emoji_varyantlar": [
+        "1f4ac",
+        "1f5e3_fe0f"
+      ]
     },
     {
       "id": "bekle",
@@ -891,7 +998,11 @@
         "bir saniye"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "23f3"
+      "emoji_kaynak": "23f3",
+      "emoji_varyantlar": [
+        "231b",
+        "23f0"
+      ]
     },
     {
       "id": "selamlama",
@@ -952,7 +1063,11 @@
         "bos mesaj"
       ],
       "gorsel_tipi": "emoji",
-      "emoji_kaynak": "1f615"
+      "emoji_kaynak": "1f615",
+      "emoji_varyantlar": [
+        "1f635_200d_1f4ab",
+        "1fae4"
+      ]
     }
   ]
 }

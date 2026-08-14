@@ -20,11 +20,19 @@ call :bul_python
 if defined PYEXE goto :python_ok
 
 echo  Python bulunamadi - winget ile kuruluyor (birkac dakika surebilir)...
-winget install -e --id Python.Python.3.13 --accept-source-agreements --accept-package-agreements
+winget install -e --id Python.Python.3.13 --source winget --accept-source-agreements --accept-package-agreements
+if errorlevel 1 (
+  echo.
+  echo  Python kurulumu basarisiz oldu. Yukaridaki winget hatasina bakin.
+  echo  Elle kurulum: https://www.python.org/downloads/
+  echo  Kurulum ekraninda "Add python.exe to PATH" kutusunu isaretleyin.
+  pause
+  exit /b 1
+)
 call :bul_python
 if defined PYEXE goto :python_ok
 echo.
-echo  Python kuruldu ama bu pencereden henuz gorunmuyor.
+echo  Python kurulumu tamamlandi ama python.exe bulunamadi.
 echo  Bu pencereyi KAPATIP kurulum\KUR.bat dosyasini TEKRAR calistirin.
 echo  (winget de basarisiz olduysa elle kurun: https://www.python.org/downloads/
 echo   kurulum ekraninda "Add python.exe to PATH" kutusunu isaretleyin)

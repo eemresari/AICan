@@ -2,22 +2,27 @@
 
 Akis:
 1. gestures.json'da `gorsel_tipi="emoji"` ve `emoji_kaynak="<codepoint>"` olan jestleri tara.
-2. Her biri icin Google CDN'den animated WebP indir.
-3. Her frame'i Pillow ile RGBA olarak coz, LANCZOS ile 96x96'ya kucult.
-4. Alpha kanalini parlaklik carpani olarak siyah arka plana ezdir (RGB).
-5. assets/emojis/<jest_id>/frame_NN.png olarak kaydet + onizleme GIF'leri uret.
+2. Ayni jestin `emoji_varyantlar` listesindeki EK codepoint'leri de al (gorsel cesitlilik:
+   ayni duygu her seferinde ayni yuzle cikmasin).
+3. Her biri icin Google CDN'den animated WebP indir.
+4. Her frame'i Pillow ile RGBA olarak coz, LANCZOS ile 96x96'ya kucult.
+5. Alpha kanalini parlaklik carpani olarak siyah arka plana ezdir (RGB).
+6. Ana kaynak assets/emojis/<jest_id>/, varyantlar assets/emojis/<jest_id>/v01, v02 ... altina yazilir.
 
 Kullanim:
     cd orchestrator
-    python prepare_emojis.py                  # tum emojiler
-    python prepare_emojis.py selamlama        # tek jest
+    python prepare_emojis.py                  # tum emojiler + varyantlari
+    python prepare_emojis.py selamlama        # tek jest (ana + varyantlari)
+    python prepare_emojis.py --eksikler       # yalnizca diskte olmayanlari indir (guvenli tekrar calistirma)
     python prepare_emojis.py --test           # sadece selamlama + onizleme (kaliteyi gormek icin)
     python prepare_emojis.py --fps 15         # farkli fps (default 12)
+    python prepare_emojis.py --onizleme hepsi # varyantlar icin de GIF uret (default: yalniz ana)
 
 Cikti her jest klasorunde:
     frame_00.png ... frame_NN.png   - 96x96 RGB, runtime'da oynatilacak
     preview.gif                     - 96x96 gercek boyut animasyon
     preview_zoom.gif                - 960x960 (10x zoom) gozle inceleme icin
+    v01/, v02/ ...                  - ayni jestin alternatif emojileri (ayni dosya duzeni)
 
 Lisans notu: Noto Emoji - Apache 2.0 + OFL. Atif gerekli.
 """
@@ -109,8 +114,23 @@ def save_previews(rgba_frames: list[Image.Image], out_dir: Path, fps: int) -> No
     print(f"    -> preview.gif + preview_zoom.gif ({fps} fps, {duration_ms} ms/frame)")
 
 
-def process_jest(jest_id: str, codepoint: str, fps: int) -> dict:
-    print(f"[{jest_id}]  codepoint={codepoint}")
+def varyant_hedefleri(jest: dict) -> list[tuple[str, str, Path]]:
+    """Jestin (etiket, codepoint, cikti_klasoru) listesi: once ana kaynak, sonra varyantlar.
+
+    Ana kaynak assets/emojis/<id>/ altinda kalir (mevcut kurulumlar bozulmasin);
+    varyantlar v01, v02 ... alt klasorlerine yazilir.
+    """
+    jest_id = jest["id"]
+    kok = ASSETS_DIR / jest_id
+    hedefler = [(jest_id, jest["emoji_kaynak"], kok)]
+    for i, cp in enumerate(jest.get("emoji_varyantlar") or [], start=1):
+        hedefler.append((f"{jest_id}/v{i:02d}", cp, kok / f"v{i:02d}"))
+    return hedefler
+
+
+def process_emoji(etiket: str, codepoint: str, out_dir: Path, fps: int,
+                  onizleme: bool) -> dict:
+    print(f"[{etiket}]  codepoint={codepoint}")
     webp = fetch_emoji_webp(codepoint)
     raw = extract_frames(webp)
     orig_size = raw[0].size
@@ -119,10 +139,10 @@ def process_jest(jest_id: str, codepoint: str, fps: int) -> dict:
     resized = [resize_keep_alpha(f, TARGET_SIZE) for f in raw]
     rgb_frames = [premultiply_onto_black(f) for f in resized]
 
-    out_dir = ASSETS_DIR / jest_id
     save_frames(rgb_frames, out_dir)
-    save_previews(resized, out_dir, fps)
-    return {"jest_id": jest_id, "frames": len(rgb_frames), "size": orig_size}
+    if onizleme:
+        save_previews(resized, out_dir, fps)
+    return {"etiket": etiket, "frames": len(rgb_frames), "size": orig_size}
 
 
 def main() -> int:
@@ -135,6 +155,10 @@ def main() -> int:
                         help="Sadece selamlama + onizlemeleri uret (kalite kontrol)")
     parser.add_argument("--fps", type=int, default=DEFAULT_FPS,
                         help=f"Onizleme GIF'i ve runtime hedef FPS (default {DEFAULT_FPS})")
+    parser.add_argument("--eksikler", action="store_true",
+                        help="Diskte kareleri zaten olanlari atla — yarim kalan indirmeyi tamamlar")
+    parser.add_argument("--onizleme", choices=("ana", "hepsi", "yok"), default="ana",
+                        help="GIF onizlemesi kimler icin uretilsin (default: yalniz ana emoji)")
     args = parser.parse_args()
 
     if not GESTURES_PATH.exists():
@@ -155,6 +179,7 @@ def main() -> int:
         if not targets:
             print("HATA: selamlama jesti emoji olarak isaretli degil", file=sys.stderr)
             return 1
+        args.onizleme = "hepsi"   # kalite kontrolu varyantlari da kapsasin
     elif args.jest_id:
         targets = [j for j in emoji_jests if j["id"] == args.jest_id]
         if not targets:
@@ -163,23 +188,33 @@ def main() -> int:
     else:
         targets = emoji_jests
 
-    print(f"Islenecek: {len(targets)} jest, FPS={args.fps}")
+    hedefler = [h for j in targets for h in varyant_hedefleri(j)]
+    if args.eksikler:
+        onceki = len(hedefler)
+        hedefler = [h for h in hedefler if not any(h[2].glob("frame_*.png"))]
+        print(f"--eksikler: {onceki - len(hedefler)} emoji diskte hazir, atlandi")
+
+    print(f"Islenecek: {len(targets)} jest / {len(hedefler)} emoji, FPS={args.fps}")
     print()
 
     results = []
     errors = []
-    for j in targets:
+    for etiket, codepoint, out_dir in hedefler:
+        onizleme = (args.onizleme == "hepsi"
+                    or (args.onizleme == "ana" and "/" not in etiket))
         try:
-            results.append(process_jest(j["id"], j["emoji_kaynak"], args.fps))
+            results.append(process_emoji(etiket, codepoint, out_dir, args.fps, onizleme))
         except Exception as e:
-            errors.append((j["id"], str(e)))
+            # Tek bir varyantin dusmesi kalan emojileri durdurmasin — runtime
+            # eksik varyanti zaten atlar, jest ana emojisiyle calismaya devam eder.
+            errors.append((etiket, str(e)))
             print(f"    HATA: {e}")
 
     print()
     print(f"Tamamlandi: {len(results)} basarili, {len(errors)} hatali")
     if errors:
-        for jid, err in errors:
-            print(f"  - {jid}: {err}")
+        for etiket, err in errors:
+            print(f"  - {etiket}: {err}")
         return 2
     return 0
 

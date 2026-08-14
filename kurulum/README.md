@@ -185,7 +185,7 @@ gecikme), anahtar da yoksa ücretsiz edge/Piper sesine düşer.
 | "Python bulunamadi" | KUR.bat'ı tekrar çalıştır; olmadıysa python.org'dan kur ("Add to PATH" işaretli) |
 | "DLL load failed" (faster_whisper/piper) | VC++ Redistributable eksik → https://aka.ms/vs/17/release/vc_redist.x64.exe kur, sağlık kontrolünü tekrar koş |
 | **`CUBLAS_STATUS_NOT_SUPPORTED`** | RTX 50 serisinde INT8 → `config.json`'da `whisper_compute_type` **float16** olmalı; `pip install -U "ctranslate2>=4.6.3,<5"` |
-| **Cevaplar 10 kat yavaş, `size_vram=0`** | Ollama kartı tanımamış → `winget upgrade -e --id Ollama.Ollama` + NVIDIA sürücüsünü güncelle |
+| **Cevaplar 10 kat yavaş, `size_vram=0`** | Ollama kartı tanımamış → `winget upgrade -e --id Ollama.Ollama --source winget` + NVIDIA sürücüsünü güncelle |
 | Sağlık kontrolü "modelin %X'i GPU'da" diyor | Model karta sığmıyor → daha küçük model (`gemma4:12b`) ya da `num_ctx` düşür |
 | **İnen GB sürekli artıp azalıyor** | Ollama 4 paralel akış kullanıyor, biri kopunca o parça baştan alınıyor → `kurulum\MODEL_INDIR.bat` (akışı 1'e indirir + kaldığı yerden tekrar dener) |
 | Model inmiyor | İnterneti kontrol et; `MODEL_INDIR.bat` dene; olmazsa `ollama pull <model>` elle |

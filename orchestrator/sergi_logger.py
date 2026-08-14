@@ -93,6 +93,9 @@ class SergiLogger:
                 "stt": {"deneme": 0, "bos": 0, "yanki": 0, "kurtarma": 0,
                         "toplam_ms": 0, "konusma_sn": 0.0},
                 "sohbet_denemesi": 0,
+                # Yasakli girdi: yalniz SAYI ve kategori tutulur; sozun kendisi
+                # HICBIR loga yazilmaz (ekrana da cikmadi).
+                "yasakli": {"toplam": 0, "agir": 0, "kategoriler": {}},
             }
         log.info("Sergi: ziyaretci #%d basladi [neden=%s]", self._sayac, reason)
 
@@ -200,6 +203,22 @@ class SergiLogger:
                     z["anlamsiz"]["duyamadi"] += 1
             else:
                 z["son_aktivite_mono"] = time.monotonic()
+
+    @_safe
+    def yasakli(self, kategori: str, severity: int = 5) -> None:
+        """Yasakli kelime filtresi bir sozu engelledi (web_server cagirir).
+        Sozun KENDISI kaydedilmez — gorevli icin sayi ve kategori yeter."""
+        with self._lock:
+            z = self._ziyaretci
+            if z is None:
+                return
+            y = z.setdefault("yasakli", {"toplam": 0, "agir": 0, "kategoriler": {}})
+            y["toplam"] += 1
+            if int(severity) >= 4:
+                y["agir"] += 1
+            k = str(kategori or "bilinmiyor")
+            y["kategoriler"][k] = y["kategoriler"].get(k, 0) + 1
+            z["son_aktivite_mono"] = time.monotonic()
 
     @_safe
     def sohbet(self) -> None:
@@ -316,6 +335,13 @@ class SergiLogger:
         ]
         if k["sohbet_denemesi"]:
             satirlar.append(f"Sohbet denemesi:    {k['sohbet_denemesi']} (oyuna yonlendirildi)")
+        ya = k.get("yasakli") or {}
+        if ya.get("toplam"):
+            kats = ", ".join(f"{a} {s}" for a, s in
+                             sorted(ya.get("kategoriler", {}).items(),
+                                    key=lambda x: -x[1])[:4])
+            satirlar.append(f"Yasakli girdi:      {ya['toplam']} engellendi "
+                            f"(agir {ya.get('agir', 0)}) [{kats}]")
         if k["anlamsiz_ornek"]:
             satirlar.append("Anlasilamayan sozler:")
             satirlar += [f"  · {s}" for s in k["anlamsiz_ornek"]]

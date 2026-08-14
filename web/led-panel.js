@@ -440,6 +440,13 @@
     return 'breathe';
   }
 
+  // Bu an oynatilacak emoji karesi cizilmeye hazir mi? (varyant henuz inmemis olabilir)
+  function _emojiKaresiHazir(frames, t, fps) {
+    if (!frames || frames.length === 0) return false;
+    const img = frames[Math.floor(t * fps) % frames.length];
+    return !!(img && img.complete && img.naturalWidth > 0);
+  }
+
   // ——— Otonom "canlı göz" idle sistemi —————————————————————
   // Referans: FluxGarage/RoboEyes (parametrik göz + autoblinker + curiosity/tired)
   // ve sidikalamini/eyes-animation (akışkan pupil + state geçişleri).
@@ -787,8 +794,10 @@
       // assets/emojis/<id>/frame_*.png kareleri oynatir.
       this.mode = 'desen';            // 'desen' | 'emoji'
       this.emojiFps = 12;
-      this.emojiManifest = null;       // { jest_id: frame_count }
-      this.emojiCache = new Map();     // jest_id -> Image[]
+      this.emojiManifest = null;       // { jest_id: frame_count }  (ana emoji)
+      this.emojiVariants = null;       // { jest_id: [{dizin, kare}, ...] }  ana + v01, v02 ...
+      this.emojiCache = new Map();     // "jest_id|dizin" -> Image[]
+      this.lastVariant = new Map();    // jest_id -> son oynatilan varyant indeksi
 
       // Otonom "canlı göz" idle sistemi (varsayilan kapali; app.js timer ile aktive eder)
       this.eyes = new EyeSystem(this.bufCtx, GRID);
@@ -816,8 +825,9 @@
       this.mode = (mode === 'emoji') ? 'emoji' : 'desen';
     }
 
-    setEmojiManifest(manifest, fps) {
+    setEmojiManifest(manifest, fps, variants) {
       this.emojiManifest = manifest || null;
+      this.emojiVariants = variants || null;
       if (fps && fps > 0) this.emojiFps = fps;
     }
 
@@ -825,18 +835,47 @@
       return !!(this.emojiManifest && this.emojiManifest[gestureId] > 0);
     }
 
-    _loadEmojiFrames(gestureId) {
-      if (!gestureId || !this.emojiManifest) return null;
-      if (this.emojiCache.has(gestureId)) return this.emojiCache.get(gestureId);
-      const count = this.emojiManifest[gestureId];
-      if (!count) return null;
+    // Jestin varyant listesi: [{dizin, kare}, ...]. Varyant bilgisi vermeyen
+    // (eski) sunucuda tek elemanli listeye duser — davranis eskisi gibi kalir.
+    _variantsFor(gestureId) {
+      if (!gestureId) return [];
+      const v = this.emojiVariants && this.emojiVariants[gestureId];
+      if (v && v.length) return v;
+      const count = this.emojiManifest && this.emojiManifest[gestureId];
+      return count > 0 ? [{ dizin: '', kare: count }] : [];
+    }
+
+    // Ayni jest tekrar geldiginde AYNI yuzu gostermemek icin varyant sec:
+    // rastgele, ama en son oynatilan varyant haric.
+    _pickVariant(gestureId) {
+      const list = this._variantsFor(gestureId);
+      if (list.length <= 1) return 0;
+      const son = this.lastVariant.has(gestureId) ? this.lastVariant.get(gestureId) : -1;
+      let idx;
+      if (son < 0) {
+        idx = Math.floor(Math.random() * list.length);      // ilk kez: hepsi esit sansli
+      } else {
+        idx = Math.floor(Math.random() * (list.length - 1)); // [0, n-2] -> son haric [0, n-1]
+        if (idx >= son) idx++;
+      }
+      this.lastVariant.set(gestureId, idx);
+      return idx;
+    }
+
+    _loadEmojiFrames(gestureId, variantIdx) {
+      const list = this._variantsFor(gestureId);
+      const v = list[variantIdx || 0];
+      if (!v) return null;
+      const key = gestureId + '|' + v.dizin;
+      if (this.emojiCache.has(key)) return this.emojiCache.get(key);
+      const yol = '/assets/emojis/' + gestureId + (v.dizin ? '/' + v.dizin : '');
       const frames = [];
-      for (let i = 0; i < count; i++) {
+      for (let i = 0; i < v.kare; i++) {
         const img = new Image();
-        img.src = '/assets/emojis/' + gestureId + '/frame_' + String(i).padStart(2, '0') + '.png';
+        img.src = yol + '/frame_' + String(i).padStart(2, '0') + '.png';
         frames.push(img);
       }
-      this.emojiCache.set(gestureId, frames);
+      this.emojiCache.set(key, frames);
       return frames;
     }
 
@@ -916,6 +955,7 @@
     setGesture(opts) {
       const gestureId = opts.gestureId || null;
       const isEmoji = !!opts.isEmoji;
+      const emojiVariant = (isEmoji && gestureId) ? this._pickVariant(gestureId) : 0;
       this.current = {
         pattern: resolvePattern(opts.pattern),
         primary: opts.primary || TOKENS.DEFAULT_PRIMARY,
@@ -926,9 +966,23 @@
         endsAt: performance.now() + (opts.duration || 4500),
         gestureId,
         isEmoji,
+        emojiVariant,
       };
       // emoji frame'leri arkaplanda yukle (lazy)
-      if (isEmoji && gestureId) this._loadEmojiFrames(gestureId);
+      if (isEmoji && gestureId) {
+        this._loadEmojiFrames(gestureId, emojiVariant);
+        this._prefetchVariants(gestureId);
+      }
+    }
+
+    // Bu jestin diger varyantlarini bos zamanda isit: bir sonraki tetiklemede
+    // secilen varyant hazir olsun, ilk kare desene dusmesin.
+    _prefetchVariants(gestureId) {
+      const list = this._variantsFor(gestureId);
+      if (list.length <= 1) return;
+      setTimeout(() => {
+        for (let i = 0; i < list.length; i++) this._loadEmojiFrames(gestureId, i);
+      }, 1200);
     }
 
     setIdle(opts) {
@@ -936,6 +990,12 @@
       if (opts && opts.pattern) merged.pattern = resolvePattern(opts.pattern);
       if (opts && 'gestureId' in opts) merged.gestureId = opts.gestureId;
       if (opts && 'isEmoji' in opts) merged.isEmoji = !!opts.isEmoji;
+      if (merged.isEmoji && merged.gestureId) {
+        merged.emojiVariant = this._pickVariant(merged.gestureId);
+        this._loadEmojiFrames(merged.gestureId, merged.emojiVariant);
+      } else {
+        merged.emojiVariant = 0;
+      }
       this.idle = merged;
     }
 
@@ -973,7 +1033,13 @@
       if (drewEye) { /* gözler çizildi, pattern/emoji atlanır */ } else
       if (this.mode === 'emoji' && active.isEmoji && active.gestureId
           && this.hasEmojiFor(active.gestureId)) {
-        const frames = this._loadEmojiFrames(active.gestureId);
+        let frames = this._loadEmojiFrames(active.gestureId, active.emojiVariant || 0);
+        // Secilen varyant henuz inmediyse ana emojiye dus — desen yerine
+        // dogru duyguyu goster (varyant bir sonraki tetiklemede hazir olur).
+        if (!_emojiKaresiHazir(frames, t, this.emojiFps) && active.emojiVariant) {
+          const ana = this._loadEmojiFrames(active.gestureId, 0);
+          if (_emojiKaresiHazir(ana, t, this.emojiFps)) frames = ana;
+        }
         if (frames && frames.length > 0) {
           const idx = Math.floor(t * this.emojiFps) % frames.length;
           const img = frames[idx];

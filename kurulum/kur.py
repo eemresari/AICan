@@ -252,7 +252,7 @@ def _gpu_yerlesimi_dogrula(yol: str, cfg: dict) -> None:
         if vram == 0:
             print("  !! UYARI: model CPU'da çalışıyor (size_vram=0) — cevaplar çok yavaş olur.")
             print("     NVIDIA sürücüsünü güncelle ve Ollama'yı en son sürüme çıkar:")
-            print("     winget upgrade -e --id Ollama.Ollama")
+            print("     winget upgrade -e --id Ollama.Ollama --source winget")
         elif vram < toplam * 0.9:
             print(f"  !! UYARI: modelin yalnızca %{100 * vram // toplam}'i GPU'da — "
                   f"katmanlar CPU'ya taşmış, cevaplar yavaşlar.")
@@ -267,15 +267,18 @@ def adim_ollama(cfg: dict) -> None:
     yol = ollama_yolu()
     if yol is None:
         print("  Ollama bulunamadı — winget ile kuruluyor...")
-        calistir(["winget", "install", "-e", "--id", "Ollama.Ollama",
-                  "--accept-source-agreements", "--accept-package-agreements"])
+        # --source winget şart: msstore kaynağı erişilemezse winget "hangi kaynak?"
+        # diye sorup hata kodu döndürüyor.
+        calistir(["winget", "install", "-e", "--id", "Ollama.Ollama", "--source", "winget",
+                  "--accept-source-agreements", "--accept-package-agreements"],
+                 hata_olumcul=False)
         yol = ollama_yolu()
         if yol is None:
             raise SystemExit("HATA: Ollama kurulumu doğrulanamadı. Elle kurun: https://ollama.com/download")
     else:
         # Yeni kartlar (Blackwell) yalnızca güncel Ollama'da tanınır; kurulu bir
         # sürüm varsa da yükseltmeyi dene (zaten günceli 'no upgrade' der).
-        calistir(["winget", "upgrade", "-e", "--id", "Ollama.Ollama",
+        calistir(["winget", "upgrade", "-e", "--id", "Ollama.Ollama", "--source", "winget",
                   "--accept-source-agreements", "--accept-package-agreements"],
                  hata_olumcul=False)
     try:

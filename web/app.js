@@ -1165,6 +1165,20 @@
         } else {
           drvHandleText(txt);   // panelsiz sergi: ekran-içi sürücü işler
         }
+      } else if (data && data.warning === 'blocked') {
+        // YASAKLI SÖZ: sunucu metni HİÇ göndermedi (ekranda görünmez, uyarı da
+        // verilmez — sansür olduğu belli edilmez). Yalnızca "anlamadım" repliği
+        // okunur. Oyun motoruna girdi gitmediği için tur tüketilmez; çocuk aynı
+        // soruya yeniden cevap verebilir, sayaç yerinde işler.
+        console.info('VI: yasaklı girdi engellendi (ekrana yazılmadı)');
+        if (!drvEndPending) {
+          drvSend({
+            type: 'ai_reply',
+            jest_id: data.jest_id || 'anlamadim',
+            yanit: data.yanit || 'Anlamadım, başka bir şey söyler misin?',
+            yogunluk: data.yogunluk || 0.6,
+          });
+        }
       } else if (data && data.warning === 'no_speech') {
         // Ses vardı ama metin çıkmadı (uzak/kısık konuşma) — sessiz kalma,
         // görünür geri bildirim ver. Yankı ataması (tts_echo) kasıtlı sessizdir.
@@ -1861,6 +1875,20 @@
     try {
       const data = await drvFetchJson('/api/game/input', { text: text, turn_id: turnId });
       if (thinkId) { clearTimeout(thinkId); thinkId = null; }
+      if (data.blocked) {
+        // Yasaklı girdi motora hiç girmedi: tur/soru TÜKETİLMEDİ. Sayaç geri
+        // yüklenir, yalnız "anlamadım" repliği okunur. (Sesli yolda bu noktaya
+        // gelinmez — /api/transcribe metni zaten göndermez.)
+        drvSend({ type: 'thinking', on: false });
+        drvSend({
+          type: 'ai_reply',
+          jest_id: data.jest_id || 'anlamadim',
+          yanit: data.yanit || 'Anlamadım, başka bir şey söyler misin?',
+          yogunluk: data.yogunluk || 0.6,
+        });
+        drvRestoreInputAfterFailure(turnId, timerResume);
+        return;
+      }
       if (data.error) {
         if (data.error === 'stale_input') {
           // Daha yeni payload geldiyse eski 409'un faz/kapı durumunu geri sarmasına izin verme.
@@ -2206,7 +2234,7 @@
     try {
       const r = await fetch('/api/emoji_manifest');
       const data = await r.json();
-      if (panel) panel.setEmojiManifest(data.frames || {}, data.fps || 12);
+      if (panel) panel.setEmojiManifest(data.frames || {}, data.fps || 12, data.varyantlar || null);
     } catch (e) {
       console.warn('emoji manifest yuklenemedi:', e);
     }

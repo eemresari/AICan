@@ -395,6 +395,76 @@ ollama ps
 
 Oyun başlangıç/bitişleri de `logs/session.log`'a yazılır (`OYUN [tkm|kelime|quiz] basladi/bitti/yarim_birakildi | skor…` satırları) — gün sonunda hangi oyunların ne kadar oynandığı buradan çıkarılır.
 
+### 6. Yasaklı kelime filtresi (küfür / nefret / yasak konu)
+
+Ziyaretçinin küfür, hakaret, nefret söylemi ya da serginin kapsam dışı bıraktığı
+konuları (din, etnik köken, siyaset/parti) içeren sözü **ekrana hiç yazılmaz**.
+Uyarı da verilmez, "bunu söyleyemezsin" denmez — AI yalnızca **"Anlamadım, başka
+bir şey söyler misin?"** repliğini `anlamadim` jestiyle okur. Sansür olduğu belli
+edilmez.
+
+- **Liste:** `ai/yasakli_kelimeler_tr_en.json` (TR + EN, ~1900 terim/ifade;
+  dosyanın kendi `matching_policy` alanı eşleşme kurallarını tarif eder).
+- **Kod:** `orchestrator/yasakli_filtre.py` — tam token/ifade eşleşmesi
+  (alt-dize **aranmaz**). Yakalanan biçimler:
+  leetspeak (`s1kt1r`), harf uzatma (`siiiktiiir`), harflenmiş söz (`a m k`,
+  `s.i.k.t.i.r`), aksansız yazım (`GOTUNU SIKEYIM`), Türkçe ek soyma
+  (`aptalsın → aptal`), **fiil çekimleri** (`sikiyorum`, `sikeceğim`,
+  `gebericeksin`), **ünsüz yumuşaması** (`taşağını → taşak`, `amcığına → amcık`)
+  ve **yapışık yazım** (`amınakoyum`, `siktirgit`, `orospuçocuğu`).
+  Kapsam ölçümü: 342 Türkçe kök × 45 ek = 15.308 çekim taranıyor, yalnız
+  3 bilinçli boşluk kalıyor (`kaza`, `malı`, `memeli` — hepsi koruma listesinde).
+- **Nerede uygulanır:** `/api/transcribe` (sesli yol — metin istemciye **hiç
+  gönderilmez**, sergi ekranı göstermek istese bile elinde metin olmaz),
+  `/api/send`, `/api/game/input` ve panelin ekrana yazmadan önce sorduğu
+  `/api/filter_check`.
+- **Oyun bozulmaz:** yasaklı girdi oyun motoruna girmez → **tur/soru tüketilmez**,
+  çocuk aynı soruya yeniden cevap verebilir. O turun beklenen cevapları
+  (`game.stt_hints()`) filtreden **muaftır**: "güzel'in zıt anlamlısı?" sorusuna
+  "çirkin" cevabı engellenmez (o kelimeyi zaten AI'nin kendi sorusu ekrana yazar).
+- **Log:** engellenen sözün **kendisi hiçbir loga yazılmaz**; `logs/session.log`'a
+  yalnız kategori/severity, sergi raporuna ise sayaç düşer
+  (`Yasaklı girdi: 3 engellendi (agir 1) [...]`).
+- **Ses:** replik sabit olduğu için açılıştaki TTS ön-ısıtmasına eklendi
+  (`_warm_texts`) — ElevenLabs ile **bir kez** sentezlenip `orchestrator/tts/cache`'e
+  yazılır; sahada anında çalar ve her engellemede yeniden kredi harcamaz
+  (jest `anlamadim`, yoğunluk 0.6 — payload ile birebir aynı anahtar).
+
+Ayarlar (`orchestrator/config.json`):
+
+| Anahtar | Varsayılan | Açıklama |
+|---|---|---|
+| `yasakli_filtre_enabled` | `true` | Filtreyi tamamen kapatır |
+| `yasakli_diller` | `["tr","en"]` | Hangi dil listeleri yüklensin |
+| `yasakli_fuzzy` | `false` | Bulanık (1 harf hatalı) eşleşme |
+| `yasakli_fuzzy_min_uzunluk` | `6` | Bulanık eşleşmenin alt sınırı |
+| `yasakli_baglam_duyarli` | `false` | Listenin `context_sensitive` terimleri (mal, it, deli, kel, top…) yalnız saldırı bağlamında engellensin |
+| `yasakli_izinli` | `[]` | Görevlinin izin verdiği kelimeler (çekimlerini de açar) |
+| `yasakli_ek_terimler` | `[]` | Listede olmayan, engellenmesi istenen kelimeler |
+| `yasakli_debug` | `false` | **Teşhis:** filtreden geçen sözleri metniyle `logs/session.log`'a yazar (`YASAKLI-TESHIS`). Sergi günü kapalı olmalı |
+| `yasakli_yanit` | "Anlamadım, başka bir şey söyler misin?" | Tek replik |
+
+Listede yalnız ifade olarak geçen ama tek başına da söylenen kelimeler
+(`tecavüz`, `intihar`, `meme`, `otuzbir`, `avrat`…) kodda `EK_TERIMLER` ile
+tamamlandı. Yeni bir kelime eklemek için dosyaya dokunmadan
+`yasakli_ek_terimler` kullanılabilir. Bilerek **eklenmedi:** `göğüs` (fen
+sorularında geçen normal bir kelime).
+
+**Bilinmesi gerekenler (sahada karşılaşılır):**
+
+- Liste hakaret olarak **gündelik kelimeler** de içeriyor: `koyun, kaz, tavuk,
+  maymun, böcek, mal, it, top, kel, deli, çirkin, aptal…`. Kelime Türetme'de çocuk
+  bunlardan birini söylerse "anlamadım" duyar. Çözüm: o kelimeyi `yasakli_izinli`
+  listesine ekle ya da `yasakli_baglam_duyarli: true` yap.
+- `yasakli_fuzzy` **kapalı** gelir: sergi verisi üzerinde ölçüldüğünde
+  `gerçek→gerzek`, `cansız→çapsız`, `dingin→dingil`, `oturmak→osurmak` gibi
+  yanlış engeller üretiyordu. STT hatalarını da yakalamak istenirse açılabilir.
+- Atasözü verisindeki "Allah dağına göre kar verir" gibi satırlar yasak konu
+  (din) listesine takılır; ziyaretçi atasözünün tamamını tekrarlarsa ipucu
+  muafiyeti devreye girer, ama bu atasözünü tamamen çıkarmak daha temiz olur.
+
+Test: `python orchestrator/test_yasakli.py` (Ollama/Whisper gerekmez).
+
 ---
 
 ## 🚀 Geleceğe Yönelik

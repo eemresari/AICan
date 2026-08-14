@@ -205,7 +205,11 @@ def _load_es_zit(path):
         return {}
 
 
-_ATASOZU_PATH = Path(__file__).resolve().parent.parent / "ai" / "atasozu50.json"
+# Havuz buyutuldu (2026-08-13): atasozu50.json (49) -> atasozu.json (106, elenmis).
+# atasozu.json, atasozu50'deki 49 atasozunun TAMAMINI iceriyor; hepsinin sesi
+# ElevenLabs cache'inde hazir -> gecis 0 kredi.
+# GERI DONUS: asagidaki satiri "atasozu50.json" yap; eski dosya yerinde duruyor.
+_ATASOZU_PATH = Path(__file__).resolve().parent.parent / "ai" / "atasozu.json"
 _DY_PATH = Path(__file__).resolve().parent.parent / "ai" / "dogru_yanlis.json"
 _ATASOZU_FALLBACK = [
     {"bas": "Damlaya damlaya", "tamam": ["göl olur"]},

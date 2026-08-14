@@ -29,6 +29,7 @@ from game_engine import GameEngine
 from llm_bridge import LLMBridge
 from sergi_logger import SergiLogger
 from session_logger import SessionLogger
+import yasakli_filtre
 
 logging.basicConfig(
     level=logging.INFO,
@@ -549,7 +550,7 @@ def _tts_synth_cached(state: "TTSState", cache, config: dict, text: str,
     return audio
 
 
-def _warm_texts() -> list:
+def _warm_texts(config: dict | None = None) -> list:
     """On-isitilacak sabit replikler: (metin, jest_id, yogunluk) uclusu.
 
     jest/yogunluk degerleri metnin GERCEKTE seslendirildigi payload'larla birebir
@@ -566,6 +567,12 @@ def _warm_texts() -> list:
         log.warning("On-isitma: guvenli sablonlar alinamadi: %s", e)
     # 2) Sergi selamlamasi (/api/session/new sabiti).
     items.append((SESSION_GREETING_TEXT, SESSION_GREETING_JEST, SESSION_GREETING_YOGUNLUK))
+    # 2a) Yasakli kelime repligi: SABIT metin, sik duyulabilir. Acilista bir kez
+    # ElevenLabs ile sentezlenip onbellege alinir -> sahada anlik calar ve her
+    # engellemede yeniden kredi harcanmaz. jest/yogunluk, /api/transcribe'in
+    # dondugu payload ile BIREBIR ayni (onbellek anahtari tutsun).
+    items.append((yasakli_filtre.yanit_metni(config or {}),
+                  yasakli_filtre.VARSAYILAN_JEST, 0.6))
     # 2b) Test modu replikleri ('g' ile sinirli menu) — acildiginda beklenmesin.
     try:
         for metin in _test_mode_texts():
@@ -608,7 +615,7 @@ def _warm_tts_cache(state: "TTSState", cache, config: dict) -> None:
         return
     hazir = 0
     hata = 0
-    for metin, jest, yog in _warm_texts():
+    for metin, jest, yog in _warm_texts(config):
         for parca in _split_sentences_tr(metin):
             if hata >= 3:
                 log.warning("TTS on-isitma birakildi (ust uste hata; %d parca isindi).", hazir)
@@ -742,6 +749,41 @@ def create_app(config: dict) -> Flask:
     game.sergi_logger = sergi
     log.info("Sergi ziyaretci logu: %s", sergi_dir)
 
+    # YASAKLI KELIME FILTRESI: kufur/nefret/yasak konu iceren ziyaretci sozu
+    # ekrana HIC yazilmaz. Uyari da verilmez — yalnizca "anlamadim" replikleri.
+    # Liste ACILISTA yuklenir (ilk sozde gecikme/surpriz olmasin).
+    yasakli_acik = yasakli_filtre.filtre_acik(config)
+    if yasakli_acik:
+        _f = yasakli_filtre.get_filtre(config)
+        if not _f.hazir:
+            log.error("Yasakli kelime filtresi YUKLENEMEDI — sergi acilmadan once "
+                      "ai/yasakli_kelimeler_tr_en.json kontrol edilmeli!")
+    else:
+        log.warning("Yasakli kelime filtresi KAPALI (yasakli_filtre_enabled=false)")
+
+    def _yasakli_kontrol(text: str, izinli=None):
+        """Girdi yasakli mi? Eslesme ya da None. Filtre kapaliysa hep None."""
+        if not yasakli_acik or not text:
+            return None
+        try:
+            return yasakli_filtre.get_filtre(config).kontrol(text, izinli=izinli)
+        except Exception as e:  # noqa: BLE001 — filtre hatasi sergiyi durdurmasin
+            log.warning("Yasakli filtre hatasi (girdi gecirildi): %s", e)
+            return None
+
+    def _yasakli_yanit(esl, nereden: str) -> dict:
+        """Ziyaretciye donen tek payload. Yasakli metin PAYLOAD'A KONMAZ;
+        istemci onu hicbir yerde gostermez. Loga da yalniz kategori yazilir."""
+        log.info("Yasakli girdi engellendi [%s]: %s", nereden, esl.sebep())
+        logger.log_event(f"Yasakli girdi engellendi ({nereden}): {esl.sebep()}")
+        sergi.yasakli(esl.kategori, esl.severity)
+        return {
+            "blocked": True,
+            "yanit": yasakli_filtre.yanit_metni(config),
+            "jest_id": yasakli_filtre.VARSAYILAN_JEST,
+            "yogunluk": 0.6,
+        }
+
     # Tek seferlik warmup arka planda
     if config.get("warmup_on_start", True):
         def _warm():
@@ -791,15 +833,37 @@ def create_app(config: dict) -> Flask:
 
     @app.get("/api/emoji_manifest")
     def api_emoji_manifest():
-        """Her jest_id icin assets/emojis/<id>/frame_*.png sayisi."""
+        """Her jest_id icin emoji kare sayilari.
+
+        frames     : {jest_id: kare_sayisi} — ana emoji (geriye donuk uyum).
+        varyantlar : {jest_id: [{dizin, kare}, ...]} — ana emoji ("" dizin) + v01, v02 ...
+                     Istemci ayni jest tekrar geldiginde farkli bir varyant oynatir
+                     (bkz led-panel.js _pickVariant) — ayni duygu hep ayni yuzle cikmasin.
+        """
         manifest = {}
+        varyantlar = {}
         if EMOJI_BASE_DIR.is_dir():
-            for jest_dir in EMOJI_BASE_DIR.iterdir():
-                if jest_dir.is_dir():
-                    frames = sorted(jest_dir.glob("frame_*.png"))
-                    if frames:
-                        manifest[jest_dir.name] = len(frames)
-        return jsonify({"fps": EMOJI_FPS, "frames": manifest})
+            for jest_dir in sorted(EMOJI_BASE_DIR.iterdir()):
+                if not jest_dir.is_dir():
+                    continue
+                kayitlar = []
+                ana = len(list(jest_dir.glob("frame_*.png")))
+                if ana:
+                    kayitlar.append({"dizin": "", "kare": ana})
+                for alt in sorted(jest_dir.glob("v[0-9][0-9]")):
+                    if not alt.is_dir():
+                        continue
+                    n = len(list(alt.glob("frame_*.png")))
+                    if n:
+                        kayitlar.append({"dizin": alt.name, "kare": n})
+                if kayitlar:
+                    manifest[jest_dir.name] = kayitlar[0]["kare"]
+                    varyantlar[jest_dir.name] = kayitlar
+        resp = jsonify({"fps": EMOJI_FPS, "frames": manifest, "varyantlar": varyantlar})
+        # Kiosk tarayicisi profilini gunler boyu tasiyor: bayat manifest,
+        # yeni indirilen varyantlarin hic gorunmemesi demek olurdu.
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
 
     @app.get("/assets/<path:filename>")
     def static_assets(filename):
@@ -911,6 +975,11 @@ def create_app(config: dict) -> Flask:
                 "max": max_chars,
                 "len": len(text),
             }), 413
+        # Yasakli girdi (panelden yazilan metin de dahil): LLM'e GITMEZ, ekrana
+        # yazilmaz — yalniz "anlamadim" repligi doner.
+        esl = _yasakli_kontrol(text)
+        if esl is not None:
+            return jsonify(_yasakli_yanit(esl, "sohbet"))
         if test_mode["on"]:
             # Test gunu: sohbet kapali — LLM'e gitmeden nazik oyun yonlendirmesi.
             # (Frontend zaten oyuna yonlendirir; bu backend guvencesidir.)
@@ -939,6 +1008,25 @@ def create_app(config: dict) -> Flask:
             })
         logger.log_request(text, result)
         return jsonify(result)
+
+    @app.post("/api/filter_check")
+    def api_filter_check():
+        """Metin yasakli mi? (Kontrol paneli, sozu EKRANA YAZMADAN once sorar.)
+
+        Sesli yolda gerek yoktur — /api/transcribe metni zaten hic gondermez.
+        Yanit yasakli metni TASIMAZ; yalnizca 'anlamadim' repligi doner."""
+        payload = request.get_json(silent=True) or {}
+        text = (payload.get("text") or "").strip()
+        if not text:
+            return jsonify({"blocked": False})
+        try:
+            beklenen = game.stt_hints()
+        except Exception:  # noqa: BLE001
+            beklenen = []
+        esl = _yasakli_kontrol(text, izinli=beklenen)
+        if esl is None:
+            return jsonify({"blocked": False})
+        return jsonify(_yasakli_yanit(esl, "panel"))
 
     @app.post("/api/clear_history")
     def api_clear():
@@ -1097,6 +1185,19 @@ def create_app(config: dict) -> Flask:
         # Sergi koruma: oyun girdileri kisa olmali
         if len(text) > 60:
             text = text[:60]
+        # Yasakli girdi: oyun motoruna GIRMEZ (tur tuketilmez, soru kaymaz);
+        # ziyaretci ayni soruya tekrar cevap verebilir. Sesli yolda bu zaten
+        # /api/transcribe'da kesilir; burasi panel/yazi yolunun guvencesidir.
+        if text and not timeout:
+            try:
+                beklenen = game.stt_hints()
+            except Exception:  # noqa: BLE001
+                beklenen = []
+            esl = _yasakli_kontrol(text, izinli=beklenen)
+            if esl is not None:
+                payload = _yasakli_yanit(esl, "oyun")
+                payload.update({"phase": game.phase, "turn_id": game.turn_id})
+                return jsonify(payload)
         with game_lock:
             if jeton_gonderildi:
                 try:
@@ -1351,6 +1452,33 @@ def create_app(config: dict) -> Flask:
         if not text:
             return jsonify({"text": "", "meta": meta,
                             "warning": "tts_echo" if is_echo else "no_speech"})
+
+        # ——— YASAKLI KELIME FILTRESI ————————————————————————————————
+        # Ziyaretci sozu bu noktadan SONRA istemciye gider ve ekrana yazilir.
+        # Yasakliysa metin HIC gonderilmez: sergi ekrani gostermek istese bile
+        # elinde metin olmaz. Oyun motoruna da gitmez — tur tuketilmez, sayac
+        # islemeye devam eder, ziyaretci bambaska bir sey soyleyebilir.
+        # izinli: o turun beklenen cevaplari ("güzel"in ziddi "çirkin" gibi) —
+        # AI'nin kendi sorusunda gecen kelime cevap olarak engellenmemeli.
+        try:
+            beklenen = game.stt_hints() if ctx == "game" else []
+        except Exception:  # noqa: BLE001 — ipucu alinamazsa filtre yine calisir
+            beklenen = []
+        esl = _yasakli_kontrol(text, izinli=beklenen)
+        # TESHIS (yasakli_debug): filtreden GECEN sozler de metniyle loglanir —
+        # "kufur ekrana yazildi" sikayetinde Whisper'in tam olarak ne yazdigini
+        # gormek icin tek yol budur (normal calismada metin HIC loglanmaz).
+        # Sergi gununde KAPATILMALI: ziyaretci sozlerini diske yazar.
+        if config.get("yasakli_debug", False):
+            logger.log_event(
+                f"YASAKLI-TESHIS: {'ENGEL' if esl else 'gecti'} | metin={text!r}"
+                f" | baglam={ctx or 'sohbet'} | muaf={list(beklenen)[:4]}"
+                + (f" | sebep={esl.sebep()} terim={esl.terim!r}" if esl else ""))
+        if esl is not None:
+            payload = _yasakli_yanit(esl, "ses")
+            payload.update({"text": "", "meta": meta, "warning": "blocked"})
+            return jsonify(payload)
+
         # Sergi koruma: cok uzun konusma -> kirp (ses giris akisini kilitlemeyelim)
         max_chars = int(config.get("max_user_input_chars", 240))
         truncated = False

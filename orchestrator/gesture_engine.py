@@ -1065,34 +1065,55 @@ PATTERN_DISPATCH = {
 
 
 class EmojiCache:
-    """Jest_id basina assets/emojis/<jest_id>/frame_NN.png'leri lazy-load eder.
-    Her frame, Buffer.pixels formatiyla uyumlu list[(r,g,b)] olarak saklanir.
+    """Jest_id basina emoji karelerini lazy-load eder — VARYANTLARIYLA birlikte.
 
-    Bos liste = bu jest icin frame bulunamadi (cagiran soyut desene dusebilir).
+    Disk duzeni:
+        assets/emojis/<jest_id>/frame_NN.png          -> varyant 0 (ana emoji)
+        assets/emojis/<jest_id>/v01/frame_NN.png      -> varyant 1
+        assets/emojis/<jest_id>/v02/frame_NN.png      -> varyant 2 ...
+
+    get() varyant listesi doner: [[frame, ...], [frame, ...]]. Her frame,
+    Buffer.pixels formatiyla uyumlu list[(r,g,b)]'dir.
+
+    Bos liste = bu jest icin hic frame yok (cagiran soyut desene dusebilir).
     Cache pozitif/negatif sonuclari tutar; ayni jest icin disk tekrar okunmaz.
     """
 
     def __init__(self, base_dir: Path) -> None:
         self.base_dir = base_dir
-        self._cache: dict[str, list[list[tuple[int, int, int]]]] = {}
+        self._cache: dict[str, list[list[list[tuple[int, int, int]]]]] = {}
 
-    def get(self, jest_id: str) -> list[list[tuple[int, int, int]]]:
+    @staticmethod
+    def _kareleri_oku(klasor: Path) -> list[list[tuple[int, int, int]]]:
+        frames: list[list[tuple[int, int, int]]] = []
+        for fp in sorted(klasor.glob("frame_*.png")):
+            try:
+                img = Image.open(fp).convert("RGB")
+                if img.size != (W, H):
+                    img = img.resize((W, H), Image.Resampling.LANCZOS)
+                frames.append(list(img.getdata()))
+            except (OSError, ValueError):
+                pass  # bozuk dosya - atla
+        return frames
+
+    def get(self, jest_id: str) -> list[list[list[tuple[int, int, int]]]]:
         cached = self._cache.get(jest_id)
         if cached is not None:
             return cached
-        frames: list[list[tuple[int, int, int]]] = []
+        varyantlar: list[list[list[tuple[int, int, int]]]] = []
         jest_dir = self.base_dir / jest_id
         if jest_dir.is_dir():
-            for fp in sorted(jest_dir.glob("frame_*.png")):
-                try:
-                    img = Image.open(fp).convert("RGB")
-                    if img.size != (W, H):
-                        img = img.resize((W, H), Image.Resampling.LANCZOS)
-                    frames.append(list(img.getdata()))
-                except (OSError, ValueError):
-                    pass  # bozuk dosya - atla
-        self._cache[jest_id] = frames
-        return frames
+            ana = self._kareleri_oku(jest_dir)
+            if ana:
+                varyantlar.append(ana)
+            for alt in sorted(jest_dir.glob("v[0-9][0-9]")):
+                if not alt.is_dir():
+                    continue
+                kareler = self._kareleri_oku(alt)
+                if kareler:
+                    varyantlar.append(kareler)
+        self._cache[jest_id] = varyantlar
+        return varyantlar
 
 
 # ============== Engine ==============
@@ -1110,6 +1131,24 @@ class GestureEngine:
         self.intensity: float = 1.0
         self._t0 = time.monotonic()
         self.emoji_cache = EmojiCache(_EMOJI_BASE_DIR)
+        # Jest basina son oynatilan emoji varyanti — ayni duygu ust uste gelirse
+        # ayni yuzu gostermemek icin (bkz _varyant_sec).
+        self._son_varyant: dict[str, int] = {}
+        self.variant = 0
+
+    def _varyant_sec(self, jest_id: str, varyant_sayisi: int) -> int:
+        """Rastgele varyant sec — en son oynatilani haric tutarak."""
+        if varyant_sayisi <= 1:
+            return 0
+        son = self._son_varyant.get(jest_id, -1)
+        if son < 0:
+            idx = random.randrange(varyant_sayisi)          # ilk kez: hepsi esit sansli
+        else:
+            idx = random.randrange(varyant_sayisi - 1)      # [0, n-2] -> son haric [0, n-1]
+            if idx >= son:
+                idx += 1
+        self._son_varyant[jest_id] = idx
+        return idx
 
     def trigger(self, jest_id: str, yogunluk: Optional[float] = None,
                 sure_sn: Optional[float] = None) -> bool:
@@ -1122,6 +1161,10 @@ class GestureEngine:
         self.start = time.monotonic()
         self.duration = float("inf") if sure_sn is None else float(sure_sn)
         self.intensity = float(yogunluk if yogunluk is not None else anim["yogunluk_varsayilan"])
+        if g.get("gorsel_tipi") == "emoji":
+            self.variant = self._varyant_sec(jest_id, len(self.emoji_cache.get(jest_id)))
+        else:
+            self.variant = 0
         return True
 
     def stop(self) -> Optional[str]:
@@ -1145,9 +1188,11 @@ class GestureEngine:
         g = self.active
         elapsed = now - self.start
 
-        # Emoji yolu: hazir frame'leri sirayla oynat
+        # Emoji yolu: secilen varyantin hazir frame'lerini sirayla oynat
         if g.get("gorsel_tipi") == "emoji":
-            frames = self.emoji_cache.get(g["id"])
+            varyantlar = self.emoji_cache.get(g["id"])
+            frames = varyantlar[self.variant] if self.variant < len(varyantlar) else (
+                varyantlar[0] if varyantlar else [])
             if frames:
                 idx = int(elapsed * EMOJI_FPS) % len(frames)
                 src = frames[idx]
