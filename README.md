@@ -2,17 +2,27 @@
 
 Konya Bilim Merkezi sergi ünitesi için yapay zekâ tabanlı ifade prototipi.
 
-**Akış:** ziyaretçi metin yazar → yerel AI (Gemma 3 4B) bir jest seçer → ekrandaki **96×96 yazılım LED matrisi** o jestin animasyonunu oynatır → kullanıcı **Durdur**'a basana kadar devam eder. Tüm oturum istatistikleri bir log dosyasına kaydedilir.
+**Akış:** ziyaretçi konuşur ya da yazar → yerel AI (Ollama / Qwen3 4B) bir jest
+seçer → ekrandaki **96×96 yazılım LED matrisi** o jestin animasyonunu oynatır
+→ kullanıcı **Durdur**'a basana kadar devam eder. Tüm oturum istatistikleri
+bir log dosyasına kaydedilir. Ayrıca iki oyun modu (eş/zıt anlam, atasözü)
+sohbetten bağımsız çalışır.
 
 ```
-[Tkinter giriş]  →  [Ollama / Gemma 3 4B]  →  [96×96 yazılım matrisi]
-     metin             jest seçimi              ışık animasyonu
-                          ↓
-                    [logs/session.log]
-                  detaylı oturum kaydı
+[Tarayıcı: sergi + kontrol paneli]  →  [Flask / web_server.py]  →  [Ollama / Qwen3 4B]
+   iki sekme, BroadcastChannel            mikrofon → Whisper STT      jest seçimi
+                                                    ↓                       ↓
+                                          [96×96 yazılım matrisi]   [edge-tts / Piper TTS]
+                                              ışık animasyonu           sesli yanıt
+                                                    ↓
+                                            [logs/session.log]
+                                          detaylı oturum kaydı
 ```
 
-Tek bir Python süreci. Donanım yok, ESP32 yok — `python main.py` çağırınca her şey ekranda.
+Tek bir Python süreci (Flask sunucusu). Donanım yok, ESP32 yok — `python
+run_web.py` çağırınca sergi ve kontrol paneli iki tarayıcı sekmesinde açılır.
+Eski Tkinter arayüzü (`orchestrator/main.py`) hâlâ depoda durur ama
+**kullanılmıyor**; üretim akışı budur.
 
 ---
 
@@ -24,10 +34,15 @@ Tek bir Python süreci. Donanım yok, ESP32 yok — `python main.py` çağırın
 |---|---|---|---|
 | **Python** | 3.10+ | ~30 MB | `python --version` |
 | **Git** | herhangi | ~50 MB | `git --version` |
+| **NVIDIA ekran kartı + CUDA sürücüsü** | — | — | konuşma tanıma (Whisper) GPU'da çalışır |
 | **Ollama** | son sürüm | ~500 MB | `ollama --version` |
-| **Gemma 3 4B modeli** | — | **~3.1 GB** | `ollama list` |
+| **Qwen3 4B Instruct modeli** | `qwen3:4b-instruct-2507-q4_K_M` | **~2,5 GB** | `ollama list` |
+| **Whisper large-v3-turbo modeli** | — | **~1,5 GB** | ilk açılışta `faster-whisper` otomatik indirir |
 
-Toplam disk gereksinimi: ~4 GB. RAM: en az 6 GB (model yüklenince ~3 GB kullanır).
+Toplam disk gereksinimi: ~6 GB. RAM: en az 6 GB (Ollama modeli yüklenince
+~3 GB kullanır). **İnternet:** ilk açılışta (Whisper modeli iner) ve her
+açılışta (edge-tts sesli yanıt üretimi çevrimiçi çalışır) gereklidir —
+kaynaktan çalıştırmada da paketlenmiş EXE'de de aynı.
 
 ---
 
@@ -104,24 +119,31 @@ cd orchestrator
 pip install -r requirements.txt
 ```
 
-Kurulan paketler:
-- `requests` — Ollama API çağrısı için
-- `ollama` — Python istemci kütüphanesi
+Kurulan başlıca paketler (tam liste `orchestrator/requirements.txt`'de):
+- `flask` — web sunucusu (sergi + kontrol paneli iki sekmede servis edilir)
+- `requests`, `ollama` — Ollama API çağrısı için
+- `faster-whisper`, `nvidia-cublas-cu12`, `nvidia-cudnn-cu12` — GPU'da konuşma tanıma
+- `edge-tts`, `piper-tts` — sesli yanıt (çevrimiçi birincil, Piper çevrimdışı yedek)
+- `pywebview`, `cryptography` — lisans penceresi ve imza doğrulama (yalnız dondurulmuş EXE'de devreye girer; kaynaktan çalıştırmada lisans hiç sorulmaz)
 - `psutil` — RAM/CPU istatistikleri
 
-Tkinter Python ile birlikte gelir, ek kurulum gerekmez.
+Tkinter Python ile birlikte gelir ama artık kullanılmıyor (bkz. giriş).
 
 ---
 
 ### 6. Çalıştır
 
 ```bash
-python main.py
+python run_web.py
 ```
 
-Tkinter penceresi açılır.
+Flask sunucusu ayağa kalkar ve varsayılan tarayıcıda iki sekme açılır: sergi
+ekranı (`/`) ve kontrol paneli (`/control`). Kaynaktan çalıştırmada lisans
+penceresi **çıkmaz**; `config.json`'daki `test_mode` aynen geçerlidir.
 
 İlk istek model RAM'e yüklenirken **10-20 saniye** sürer. Sonraki istekler 3-5 sn.
+İlk açılışta ayrıca Whisper modeli internetten inmemişse birkaç dakikalık bir
+bekleme olur (bkz. "Lisans" bölümü altındaki ön koşullar).
 
 ---
 
@@ -155,6 +177,12 @@ yap, yeniden başlat. Her istek ~2-3 sn daha hızlı olur.
 ---
 
 ## 🖥 Arayüz
+
+Bu düzen artık **tek Tkinter penceresi değil, iki tarayıcı sekmesidir**:
+sergi ekranı (`/`, yalnız 96×96 matris ve idle göz animasyonu) ve kontrol
+paneli (`/control`, aşağıdaki panel). İkisi `BroadcastChannel` ile haberleşir;
+sergi makinesinde ikisi de açık tutulur, ziyaretçi yalnız sergi sekmesini
+görür. Alandaki bilgiler aynı kalır — yalnız pencere yerine sekme:
 
 ```
 ┌──────────────────────────┬─────────────────────────────────────┐
@@ -206,21 +234,37 @@ yap, yeniden başlat. Her istek ~2-3 sn daha hızlı olur.
 ```
 AICAN/
 ├── README.md                 ← bu dosya
+├── run_web.py                 ← GİRİŞ NOKTASI: Flask sunucusunu kaldırır, iki sekme açar
+├── build.py                   ← standalone EXE + kurucu üretimi (bkz. "Kurucu")
+├── surum.py                   ← ürün adı/sürüm — tek kaynak
+├── lisans.py, lisans_bicim.py,
+│   lisans_durum.py, lisans_ekrani.py,
+│   parmak_izi.py, web_paket.py ← lisans hattı (bkz. "Lisans")
+├── lisans_web/index.html      ← lisans penceresi (pywebview, ham girer)
+├── installer/Aican.iss        ← Inno Setup kurucu tanımı
+├── docs/KURULUM.md            ← müşteriye giden kurulum kılavuzu
+├── docs/TESLIM.md             ← teslim kontrol listesi (geliştirici içindir)
 ├── ai/
 │   ├── gestures.json         ← 30 jest tanımı (renk, desen, hız)
-│   ├── system_prompt.txt     ← Gemma sistem promptu (kuralları)
+│   ├── system_prompt.txt     ← LLM sistem promptu (kuralları)
 │   ├── test_examples.json    ← 50 referans test örneği
 │   └── Modelfile             ← build_model.py üretir (gitignore'da)
+├── web/                       ← sergi + kontrol paneli ön yüzü (Flask servis eder)
+│   ├── AI_Body_v2.html, Kontrol_Paneli.html
+│   └── app.js, control.js, led-panel.js
 ├── orchestrator/
-│   ├── main.py               ← Tkinter UI + ana akış
-│   ├── llm_bridge.py         ← Ollama HTTP köprüsü
-│   ├── gesture_engine.py     ← 36 desen + jest dispatcher
-│   ├── matrix_sim.py         ← Tkinter Canvas tabanlı 96×96 görüntüleyici
-│   ├── session_logger.py     ← Detaylı oturum logu
-│   ├── stats.py              ← RAM / token istatistikleri (psutil)
-│   ├── build_model.py        ← Modelfile üretici
-│   ├── config.json           ← URL/model/yol ayarları
+│   ├── web_server.py         ← ÜRETİM: Flask uygulaması, lisans kapısı, main()
+│   ├── main.py                ← eski Tkinter UI — kullanılmıyor, dokunulmuyor
+│   ├── paths.py               ← kaynak/dondurulmuş yol çözümleme (tek giriş noktası)
+│   ├── llm_bridge.py          ← Ollama HTTP köprüsü
+│   ├── game_engine.py         ← eş/zıt anlam + atasözü oyunları, test_mode
+│   ├── gesture_engine.py      ← 36 desen + jest dispatcher
+│   ├── session_logger.py      ← Detaylı oturum logu
+│   ├── stats.py               ← RAM / token istatistikleri (psutil)
+│   ├── build_model.py         ← Modelfile üretici
+│   ├── config.json            ← URL/model/yol ayarları (kaynakta tohum = gerçek dosya)
 │   └── requirements.txt
+├── tests/                      ← lisans hattı + build testleri (kök seviyesinde)
 └── logs/
     └── session.log           ← her oturumda buraya eklenir (gitignore'da)
 ```
@@ -328,11 +372,98 @@ Performans, Token kullanımı, RAM, Kategori dağılımı, En sık jestler...
 
 ## 🏗 Mimari Notlar
 
-- **Tek thread'li UI, çok thread'li ağ:** Tkinter ana thread'i blok olmaz; LLM çağrısı arka plan thread'inde, sonuç `queue.Queue` üzerinden 50ms `after()` poll'üyle ana thread'e gelir.
-- **Frame loop:** matris ~30 fps'te (33ms throttle) render edilir; tüm desenler `time.monotonic()` tabanlı.
+- **Flask + tarayıcı, çok thread'li ağ:** `web_server.py` istekleri `threaded=True` ile karşılar; LLM/STT/TTS çağrıları istek thread'inde çalışır, sonuç doğrudan HTTP yanıtıyla döner (eski Tkinter'daki `queue.Queue`/`after()` poll deseni yalnız kullanılmayan `orchestrator/main.py`'de kalır).
+- **Frame loop:** matris ~30 fps'te (33ms throttle) render edilir; tüm desenler `time.monotonic()` tabanlı — bu kısım tarayıcı tarafında (`web/led-panel.js`) değişmeden çalışır.
 - **Süresiz jest:** AI bir jest seçince matriste sonsuza kadar oynar. Sadece **Durdur** butonu bitirir. Bu, sergi izleyicisinin animasyonu rahatça izlemesini sağlar.
 - **`gestures.json` = doğru kaynak:** desen, renk, hız — hepsi buradan okunur. Yeni jest eklerken sadece bu dosyayı güncelle (`gesture_engine.PATTERN_DISPATCH` listesi geçerli `desen` değerlerini gösterir).
 - **`session_logger.py`:** her oturum başında dosyaya başlık yazar, her olayı satır satır kaydeder, kapanışta özet ekler. Önceki oturumlar korunur (3 boş satır boşlukla).
+
+---
+
+## Lisans
+
+Dondurulmuş EXE açılışta — mikrofon/GPU/Ollama thread'leri başlamadan,
+Flask sunucusu kalkmadan — bir lisans anahtarı ister
+(`orchestrator/web_server.py:lisans_kapisi`). Kaynaktan `python run_web.py`
+ile çalıştırmada kapı **yoktur**; `config.json`'daki `test_mode` aynen
+geçerlidir, geliştirme döngüsü değişmez.
+
+- **Anahtar üretimi** bu depoda değil, [Lisans Merkezi](../LisansMerkezi)'nde
+  (`MERKEZ.bat` → Aican). EXE'de yalnız **açık** anahtar durur
+  (`lisans.py:ACIK_ANAHTAR_HEX`); özel anahtar `~/.luden-lisans/` altındadır ve
+  **asla commit edilmez**.
+- **İçerik paketi:** `web/` ve `ai/` EXE'nin yanına ham konmaz. Build, JS'i
+  obfuscate edip ikisini `web.pak` olarak şifreler; anahtar lisansın imzalı
+  yükünde gelir, paket lisans kapısından sonra **bellekte** çözülür
+  (`_paketi_yukle`) ve oradan servis edilir (`paths.kaynak_oku` şimi —
+  `ai/*.json` yükleyicileri de aynı yoldan geçer). Lisansı olmayan kişi
+  içeriği göremez.
+- **Aktivasyon** `%LOCALAPPDATA%\Aican\aktivasyon.dat` — makine parmak izine
+  (anakart/disk/MAC, 3'ten 2'si) HMAC ile bağlı; kopyalamak işe yaramaz.
+  Demo anahtarlarda süre ilk aktivasyondan sayılır, saat geri alınırsa kilit.
+- **Filigran:** demo lisansta sergi köşesinde `Kurum — tarih — #no` yazar
+  (`GET /api/filigran`, `web/app.js`); kalıcı lisansta yoktur.
+
+### Demo kilidi
+
+Deneme (demo) lisansta sohbet **tamamen kapalıdır**, yalnız iki oyun
+oynanabilir. Bu mevcut `test_mode` altyapısı üzerine kurulu ve demoda
+**zorla açık ve kilitli** tutulur:
+
+- `test_mode["on"]` demo'da `True`'ya zorlanır; `GET /api/test_mode` her
+  zaman `kilitli: true` döner (kontrol panelinde `g` tuşu ve TEST toggle'ı
+  gizlenir); `POST /api/test_mode` `403 {"error": "demo_kilidi"}` verir.
+  `/api/pull`, `/api/model` da demoda `403`.
+- `/api/send` demoda serbest metin yerine sabit
+  `TEST_SOHBET_KAPALI_TEXT` ile yanıtlar — yeni bir LLM isteği hiç atılmaz.
+- Ollama warmup thread'i demoda **hiç başlatılmaz** (`_warmup_baslat`) —
+  demo lisans Ollama'nın kurulu olmasına bağımlı değildir.
+- Kaynaktan çalıştırmada (`paths.FROZEN` `False`) bu kilit devreye
+  girmez; `config.json`'daki `test_mode` olduğu gibi geçerlidir.
+
+Kalıcı lisansta Ollama **ayrıca** kurulmalı/çalışıyor olmalıdır (kurucu onu
+başlatmaz); kapalıysa sohbet 403 değil, `meta.degraded: true` ile birlikte
+"Şu an düşünemiyorum, birazdan tekrar dener misin?" der — kiosk hata kutusu
+göstermez.
+
+### Kurucu
+
+`installer/Aican.iss` (Inno Setup 6). KimyaLab'daki "yalnız EXE girer"
+kuralı burada uygulanamaz: Aican standalone derlenir (Nuitka `--standalone`,
+CUDA/Whisper native DLL'leri onefile'da tamamlanamadığı için), yani
+`build/run_web.dist/*` **tamamı** kurucuya girer. Onun yerine
+`build.kurucu_uret()` ISCC'den **önce** dist'i tarar: `aktivasyon.dat`,
+`*.key`, `lisanslar.json`, `logs/`, `.tarayıcı_profili/`, ham `web/`/`ai/`,
+`main.py` ya da içinde dolu `tts_elevenlabs_api_key` olan `config.json`
+bulursa build **durur** (`tests/test_kurucu.py`).
+
+Sürüm numarası tek yerde: `surum.py`.
+
+Müşteriye giden kılavuz: [`docs/KURULUM.md`](docs/KURULUM.md). Geliştirici
+teslim kontrol listesi: [`docs/TESLIM.md`](docs/TESLIM.md).
+Dosyalar: `lisans.py`, `lisans_bicim.py` (Merkez'den birebir kopya — elle
+düzenleme, `LisansMerkezi/tests/test_urunler.py` senkronu denetler),
+`lisans_durum.py`, `parmak_izi.py`, `lisans_ekrani.py` + `lisans_web/`,
+`web_paket.py`, `surum.py`, `orchestrator/paths.py`.
+
+### Dürüst sınırlar
+
+- Kaynaktan çalıştırmada (`python run_web.py`) lisans kapısı **hiç yoktur**;
+  `test_mode` yalnız `config.json`'dan okunur. Bu bilinçli bir açık kapı —
+  geliştirme döngüsü lisanssız kalsın diye.
+- JS obfuscation ve `web.pak` şifrelemesi **caydırıcıdır, engel değil**:
+  DevTools açan biri çalışan (obfuscate edilmiş) JS'i görebilir; paketin
+  kapattığı şey içeriği diskten kopyalama/lisanssız görüntüleme yoludur.
+  Süre/lisans kontrolü teorik olarak yamalanabilir — ama yamalayan kişi
+  zaten geçerli bir anahtara sahiptir, bu artık sözleşme alanıdır.
+- Lisans dosyasının ilk aktivasyondan önce başka bir makinede kullanılması
+  engellenemez (çevrimdışı sistem); `son_kullanim_ts` mutlak tavanı bunu
+  süreyle sınırlar.
+- Anakart değişince yeniden aktivasyon gerekir (HMAC anahtarı birincil
+  bileşenden türetilir) — küçük donanım değişiklikleri (RAM, ekran kartı)
+  sorun çıkarmaz.
+- GPU'suz bir makinede açılışın ne yapacağı **bilinmiyor**; bu sürüm yalnız
+  NVIDIA GPU'lu makinede elle test edildi (bkz. `docs/KURULUM.md`).
 
 ---
 
