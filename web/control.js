@@ -65,7 +65,18 @@
   // 'g' tuşu / POST /api/test_mode: menüde yalnız Eş/Zıt + Atasözü, sohbet kapalı,
   // "merhaba" doğrudan oyun menüsü açar. Durum backend'de (config.json'da kalıcı).
   let testMode = false;
+  // Demo lisans kilidi (GET /api/test_mode kilitli:true): mod hep açık ve
+  // değiştirilemez — TEST toggle'ı gizlenir, 'g' tuşu etkisiz, rozet "DEMO" der.
+  let testModeLocked = false;
   let testBadgeEl = null;
+
+  function applyTestLock(kilitli) {
+    testModeLocked = !!kilitli;
+    if (els.testToggle) els.testToggle.style.display = testModeLocked ? 'none' : '';
+    ensureTestBadge().textContent = testModeLocked
+      ? 'DEMO · 2 OYUN · SOHBET KAPALI'
+      : 'TEST MODU · 2 OYUN · SOHBET KAPALI';
+  }
 
   function ensureTestBadge() {
     if (testBadgeEl) return testBadgeEl;
@@ -107,6 +118,7 @@
 
   let testToggleBusy = false;
   async function toggleTestMode() {
+    if (testModeLocked) return;    // demo lisans: mod kilitli, 'g'/toggle etkisiz
     if (testToggleBusy) return;    // tuş basılı tutulursa istek seli olmasın
     testToggleBusy = true;
     noteActivity();
@@ -232,6 +244,7 @@
       // kaçırılmış broadcast kaynaklı senkron kaybını kendiliğinden onarır.
       if (++testSyncTick % 5 === 0) {
         fetch('/api/test_mode').then((r) => r.json()).then((d) => {
+          if (d && typeof d.kilitli === 'boolean' && d.kilitli !== testModeLocked) applyTestLock(d.kilitli);
           if (d && typeof d.on === 'boolean' && d.on !== testMode) applyTestMode(d.on, true);
         }).catch(() => {});
       }
@@ -703,6 +716,12 @@
       if (typeof d.test_mode === 'boolean') applyTestMode(d.test_mode, true);
       updateCharCount();
     } catch (_) { /* varsayilanlar kalir */ }
+    // Demo lisans kilidi: açılışta bir kez (sonra 10 sn'lik senkronda da bakılır).
+    try {
+      const r = await fetch('/api/test_mode');
+      const d = await r.json();
+      if (d && typeof d.kilitli === 'boolean') applyTestLock(d.kilitli);
+    } catch (_) { /* kilit yok sayılır */ }
   }
 
   function isNewSessionGreeting(text) {
