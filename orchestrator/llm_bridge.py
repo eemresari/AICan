@@ -12,6 +12,8 @@ from typing import Optional
 
 import requests
 
+import paths
+
 log = logging.getLogger(__name__)
 
 # Mirror override: model bu jestlerden birini secince ve kullanici 1. tekil
@@ -196,11 +198,14 @@ class LLMBridge:
         # web_server zaten 413 ile reddeder; bu, Tkinter (main.py) yolunu da korur.
         self.max_user_input_chars = int(config.get("max_user_input_chars", 240))
 
-        prompt_path = (base_dir / config["system_prompt_path"]).resolve()
-        gestures_path = (base_dir / config["gestures_path"]).resolve()
-        self.system_prompt = prompt_path.read_text(encoding="utf-8")
+        # ai/ icerigi paths.kaynak_oku uzerinden: dondurulmus build'de web.pak'tan
+        # (diskte ai/ yoktur), kaynakta diskten. base_dir yalniz geriye uyumluluk
+        # icin imzada duruyor; config'deki yollar orchestrator/'a gorelidir.
+        self.system_prompt = paths.kaynak_oku(
+            paths.kaynak_rel(config["system_prompt_path"])).decode("utf-8-sig")
 
-        gdata = json.loads(gestures_path.read_text(encoding="utf-8"))
+        gdata = json.loads(paths.kaynak_oku(
+            paths.kaynak_rel(config["gestures_path"])).decode("utf-8-sig"))
         self.valid_ids = {g["id"] for g in gdata["jestler"]}
 
         # Yapilandirilmis cikti semasi — Ollama'da jest_id'yi enum'a kilitler,

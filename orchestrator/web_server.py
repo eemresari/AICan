@@ -27,6 +27,7 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 
 from game_engine import GameEngine
 from llm_bridge import LLMBridge
+import paths
 from session_logger import SessionLogger
 
 logging.basicConfig(
@@ -37,7 +38,9 @@ logging.basicConfig(
 log = logging.getLogger("web_server")
 
 BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "config.json"
+# Yazilan her sey (config, log, onbellek, tarayici profili) paths uzerinden:
+# kaynakta bugunku konumlar, dondurulmus EXE'de %LOCALAPPDATA%\Aican.
+CONFIG_PATH = Path(paths.config_path())  # bilgi amacli; load/save her cagrida cozer
 ROOT_DIR = BASE_DIR.parent
 WEB_DIR = ROOT_DIR / "web"
 ASSETS_DIR = ROOT_DIR / "assets"
@@ -252,11 +255,12 @@ HAZIR_BEKLE_TEXT = "Hazır olunca 'başla' de ya da butona dokun :)"
 
 def load_config() -> dict:
     # utf-8-sig: elle duzenlenen config Notepad/PowerShell'den BOM'lu kaydedilse de okunur.
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+    # Yol her cagrida cozulur (AICAN_DATA_ROOT / dondurulmus kok testte degisebilir).
+    return json.loads(Path(paths.config_path()).read_text(encoding="utf-8-sig"))
 
 
 def save_config(cfg: dict) -> None:
-    CONFIG_PATH.write_text(
+    Path(paths.config_path()).write_text(
         json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -609,7 +613,7 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
                 model=config.get("tts_elevenlabs_model", "eleven_flash_v2_5"),
                 language=config.get("tts_elevenlabs_language", "tr"),
                 monthly_cap=config.get("tts_elevenlabs_monthly_credit_cap", 32000),
-                usage_path=BASE_DIR / "tts" / "elevenlabs_usage.json",
+                usage_path=paths.elevenlabs_usage_path(),
             )
             if config.get("tts_fallback_enabled", True):
                 # 3 katman: elevenlabs -> edge -> piper.
@@ -659,8 +663,8 @@ def create_app(config: dict) -> Flask:
     # Aktif oyuna en son girdi gelen an: /api/session/new'in "canli oyunu koruma"
     # karari bunu kullanir (sayfa yenilenip oyun sahipsiz kaldiysa eskimis sayilir).
     game_last_input = {"t": 0.0}
-    gestures_path = (BASE_DIR / config["gestures_path"]).resolve()
-    log_path = (BASE_DIR / config.get("session_log_path", "../logs/session.log")).resolve()
+    gestures_rel = paths.kaynak_rel(config["gestures_path"])
+    log_path = Path(paths.session_log_path(config.get("session_log_path")))
     logger = SessionLogger(log_path, config["ollama_url"], bridge.model)
     logger.start()
     log.info("Oturum logu: %s", log_path)
@@ -690,7 +694,7 @@ def create_app(config: dict) -> Flask:
     from tts.cache import WavCache
     tts_state = TTSState()
     tts_cache = WavCache(
-        BASE_DIR / "tts" / "cache",
+        paths.tts_cache_dir(),
         max_files=int(config.get("tts_cache_max", 500)),
         enabled=bool(config.get("tts_cache_enabled", True)),
     )
@@ -712,7 +716,8 @@ def create_app(config: dict) -> Flask:
 
     @app.get("/api/gestures")
     def api_gestures():
-        return send_from_directory(str(gestures_path.parent), gestures_path.name)
+        # ai/ icerigi diskte olmayabilir (web.pak); paths.kaynak_oku simi.
+        return Response(paths.kaynak_oku(gestures_rel), mimetype="application/json")
 
     @app.get("/api/emoji_manifest")
     def api_emoji_manifest():
@@ -1190,7 +1195,7 @@ def create_app(config: dict) -> Flask:
         # model/ayar adaylarini ayni set uzerinde kiyaslamak icin.
         if config.get("whisper_debug_save_audio", False):
             try:
-                dbg_dir = ROOT_DIR / "logs" / "stt_debug"
+                dbg_dir = Path(paths.stt_debug_dir())
                 dbg_dir.mkdir(parents=True, exist_ok=True)
                 stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
                 (dbg_dir / f"{stamp}.webm").write_bytes(audio_bytes)
@@ -1365,7 +1370,7 @@ def open_browsers(host: str, port: int, delay_sec: float = 1.2,
                 # Eski calistirmadan kalan sergi sayfasi 'hayalet istemci' olarak
                 # oturum sifirlayip aktif oyunu bozabiliyor — once onu kapat.
                 _kill_stale_kiosk()
-                profil = Path(__file__).resolve().parent.parent / ".tarayici_profili"
+                profil = paths.browser_profile_dir()
                 try:
                     subprocess.Popen([
                         exe,

@@ -16,10 +16,11 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 
-# orchestrator/tts/emotion_voice_map.py -> parents[2] = aican kok klasoru
-_DEFAULT_GESTURES = Path(__file__).resolve().parents[2] / "ai" / "gestures.json"
+import paths
+
+# paths.kaynak_oku anahtari (depo kokune gore POSIX); dondurulmus build'de bellekten.
+_DEFAULT_GESTURES = "ai/gestures.json"
 
 # Notr capa: V=0, A~0.45 (sakin konusma). Ham formuller bu noktada bu degerleri verir,
 # boylece yogunluk harmani puruzsuz olur.
@@ -40,7 +41,7 @@ def _clamp(x: float, lo: float, hi: float) -> float:
 @lru_cache(maxsize=4)
 def _load_va(gestures_path: str) -> dict:
     """jest_id -> (valans, uyarilma) sozlugu. lru_cache ile dosya bir kez okunur."""
-    data = json.loads(Path(gestures_path).read_text(encoding="utf-8"))
+    data = json.loads(paths.kaynak_oku(gestures_path).decode("utf-8-sig"))
     out = {}
     for j in data.get("jestler", []):
         out[j["id"]] = (

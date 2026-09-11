@@ -15,9 +15,10 @@ import json
 import logging
 import random
 import re
-from pathlib import Path
 
 import requests
+
+import paths
 
 log = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def ilk_harf(kelime: str) -> str:
 # o oyunda kullanılmamış) kelime seçer. Havuzda da yoksa None döner (mevcut
 # 'pes' akışı korunur). game_engine._pick_ai_word havuz deseninin word_llm
 # tarafındaki karşılığıdır; dosya okunamazsa boş havuz = eski davranış.
-_CATS_PATH = Path(__file__).resolve().parent.parent / "ai" / "word_categories.json"
+_CATS_PATH = "ai/word_categories.json"  # paths.kaynak_oku anahtari (depo kokune gore)
 _yedek_havuz_cache = None  # {harf: [kelime, ...]} — lazy, tek sefer yüklenir
 
 
@@ -63,7 +64,7 @@ def _yedek_havuz() -> dict:
     if _yedek_havuz_cache is None:
         idx: dict = {}
         try:
-            data = json.loads(_CATS_PATH.read_text(encoding="utf-8"))
+            data = json.loads(paths.kaynak_oku(_CATS_PATH).decode("utf-8-sig"))
             for words in data.values():
                 if not isinstance(words, list):
                     continue
