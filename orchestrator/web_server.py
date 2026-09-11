@@ -334,18 +334,16 @@ class WhisperState:
         return self.model is not None and self.status == "hazir"
 
 
-def _add_cuda_dll_dirs() -> None:
-    """pip ile kurulan nvidia-* wheel'larinin (cublas/cudnn) DLL klasorlerini
-    Windows DLL arama yoluna ekler.
+def _cuda_dll_kokleri() -> list:
+    """CUDA DLL'lerinin arandigi `nvidia/` kok dizinleri.
 
-    KRITIK: ctranslate2 cublas64_12.dll / cudnn dll'lerini GEC yukler — model
-    CUDA'ya sorunsuz 'yuklenir' (status=hazir) ama ILK transkripsiyonda
-    "Library cublas64_12.dll is not found" ile coker. Sistem CUDA Toolkit'i
-    kurulu degilse bile pip'teki nvidia-cublas-cu12 + nvidia-cudnn-cu12
-    yeterlidir; burada onlarin bin/ klasorlerini hem add_dll_directory hem
-    PATH'e ekleriz (ct2 PATH uzerinden LoadLibrary yapar)."""
-    if os.name != "nt":
-        return
+    Kaynaktan calisirken pip'in kurdugu site-packages/nvidia (venv + global
+    + purelib). DONDURULMUS build'de site-packages YOKTUR: build.py
+    (--include-package-data=nvidia + cuda_dll_tamamla) DLL'leri EXE'nin
+    yanina `nvidia/<cublas|cudnn>/bin` olarak koyar; resource_root() oradir.
+    """
+    if paths.FROZEN:
+        return [Path(paths.resource_root()) / "nvidia"]
     import site
     import sysconfig
     roots = set()
@@ -354,11 +352,23 @@ def _add_cuda_dll_dirs() -> None:
     except Exception:  # noqa: BLE001 — venv/embedded python'da olmayabilir
         pass
     roots.add(sysconfig.get_paths().get("purelib", ""))
+    return [Path(r) / "nvidia" for r in sorted(roots) if r]
+
+
+def _add_cuda_dll_dirs() -> None:
+    """nvidia-* (cublas/cudnn) DLL klasorlerini Windows DLL arama yoluna ekler.
+
+    KRITIK: ctranslate2 cublas64_12.dll / cudnn dll'lerini GEC yukler — model
+    CUDA'ya sorunsuz 'yuklenir' (status=hazir) ama ILK transkripsiyonda
+    "Library cublas64_12.dll is not found" ile coker. Sistem CUDA Toolkit'i
+    kurulu degilse bile pip'teki nvidia-cublas-cu12 + nvidia-cudnn-cu12
+    yeterlidir; burada onlarin bin/ klasorlerini hem add_dll_directory hem
+    PATH'e ekleriz (ct2 PATH uzerinden LoadLibrary yapar). Nerede aranacagi
+    _cuda_dll_kokleri'nde (kaynak: site-packages, EXE: dist/nvidia)."""
+    if os.name != "nt":
+        return
     added = []
-    for root in roots:
-        if not root:
-            continue
-        nv = Path(root) / "nvidia"
+    for nv in _cuda_dll_kokleri():
         if not nv.is_dir():
             continue
         for bin_dir in sorted(nv.glob("*/bin")):
