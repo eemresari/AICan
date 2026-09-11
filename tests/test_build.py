@@ -59,7 +59,9 @@ def test_web_pak_lisans_ekrani_assets_tohum_girer():
     tohum = [p for p in komut if p.startswith("--include-data-files=")
              and p.endswith("=config.json")]
     assert len(tohum) == 1, komut
-    assert tohum[0].replace("\\", "/").endswith("orchestrator/config.json=config.json")
+    # Ham orchestrator/config.json DEGIL — normalize edilmis dist/config.json.
+    assert tohum[0].replace("\\", "/").endswith("/dist/config.json=config.json")
+    assert "orchestrator/config.json" not in tohum[0].replace("\\", "/")
 
 
 @pytest.mark.parametrize("yasak", ["main.py", "veri_uretim", "kurulum",
@@ -254,6 +256,45 @@ def test_tohum_config_bos_anahtar_gecer(tmp_path):
 def test_depodaki_tohum_config_temiz():
     """orchestrator/config.json gercekten gizli alan tasimiyor (commit kilidi)."""
     build.tohum_config_kontrol()
+
+
+# --------------------------------------------------------------------------- #
+# Tohum normalizasyonu: dist/config.json musteri ilk acilisina uygun
+# --------------------------------------------------------------------------- #
+
+def test_tohum_hazirla_test_mode_KAPALI_tts_edge(tmp_path):
+    """Sergi makinesinin config'i test_mode=true / elevenlabs tasiyabilir;
+    kalici lisansli musteri ilk acilista tam urun + anahtarsiz TTS gormeli."""
+    kaynak = tmp_path / "config.json"
+    kaynak.write_text(json.dumps({
+        "test_mode": True, "tts_engine": "elevenlabs",
+        "tts_elevenlabs_api_key": "", "web_port": 1, "ollama_model": "x",
+    }), encoding="utf-8")
+    hedef = tmp_path / "dist" / "config.json"
+    out = build.tohum_hazirla(kaynak, hedef)
+    assert out == hedef and hedef.is_file()
+    cfg = json.loads(hedef.read_text(encoding="utf-8"))
+    assert cfg["test_mode"] is False
+    assert cfg["tts_engine"] == "edge"
+    # Diger alanlar dokunulmadan gecer.
+    assert cfg["web_port"] == 1 and cfg["ollama_model"] == "x"
+    # Kaynak dosya DEGISMEZ (sergi makinesinin ayarlari).
+    assert json.loads(kaynak.read_text(encoding="utf-8"))["test_mode"] is True
+
+
+def test_tohum_hazirla_dolu_anahtarda_DURUR(tmp_path):
+    kaynak = tmp_path / "config.json"
+    kaynak.write_text(json.dumps({"tts_elevenlabs_api_key": "sk-x"}), encoding="utf-8")
+    with pytest.raises(SystemExit, match="tts_elevenlabs_api_key"):
+        build.tohum_hazirla(kaynak, tmp_path / "dist" / "config.json")
+    assert not (tmp_path / "dist" / "config.json").exists()
+
+
+def test_main_tohum_hazirla_komuttan_ONCE():
+    """dist/config.json komut uretilmeden once yazilmis olmali."""
+    import inspect
+    src = inspect.getsource(build.main)
+    assert 0 < src.index("tohum_hazirla(") < src.index("komutu_olustur(")
 
 
 # --------------------------------------------------------------------------- #

@@ -68,6 +68,11 @@ DEPO_KLASORU = ".luden-lisans"
 # DURUR (her kurulum musterinin ElevenLabs kredisini yakardi).
 TOHUM_CONFIG = ORCH / "config.json"
 GIZLI_CONFIG_ALANLARI = ("tts_elevenlabs_api_key",)
+# Dist'e yazilan tohumda ZORLANAN alanlar (kullanici karari 2026-09-11):
+# sergi makinesinin config'i test_mode=true / elevenlabs tasiyabilir; kalici
+# lisansli musteri ilk acilista tam urunu ve anahtarsiz (ucretsiz) TTS'i
+# gormeli. Demo lisansta test_mode'u zaten web_server zorla acar.
+TOHUM_ZORLA = {"test_mode": False, "tts_engine": "edge"}
 
 # Kurucuya (dist\*) SIZMAMASI gereken adlar. Veri koku frozen'da
 # %LOCALAPPDATA% oldugu icin normalde dist temizdir; bu tarama "biri
@@ -147,6 +152,19 @@ def tohum_config_kontrol(yol: Path = TOHUM_CONFIG) -> dict:
             "kopyalanir. Anahtari bosaltip (\"\") yeniden deneyin; sergi "
             "makinesinde anahtar %LOCALAPPDATA%\\Aican\\config.json'a elle girilir.")
     return cfg
+
+
+def tohum_hazirla(kaynak: Path = TOHUM_CONFIG, hedef: Path = None) -> Path:
+    """orchestrator/config.json -> dist/config.json: gizli alan kontrolu +
+    TOHUM_ZORLA. Kaynak dosyaya dokunmaz; yazilan yolu doner."""
+    hedef = Path(hedef) if hedef else KOK / "dist" / "config.json"
+    cfg = tohum_config_kontrol(kaynak)
+    cfg.update(TOHUM_ZORLA)
+    hedef.parent.mkdir(parents=True, exist_ok=True)
+    hedef.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n",
+                     encoding="utf-8")
+    print(f"[build] tohum config -> {hedef} ({', '.join(f'{k}={v}' for k, v in TOHUM_ZORLA.items())})")
+    return hedef
 
 
 def _ikon_yolu():
@@ -257,8 +275,10 @@ def komutu_olustur(cikti_dizini=None, konsol: bool = False, ico=None) -> list:
         f"--include-data-files={dist / 'web.pak'}=web.pak",
         f"--include-data-dir={KOK / 'lisans_web'}=lisans_web",
         f"--include-data-dir={KOK / 'assets'}=assets",
-        # Tohum config: dist kokune config.json (paths.ensure_seeded kopyalar).
-        f"--include-data-files={TOHUM_CONFIG}=config.json",
+        # Tohum config: tohum_hazirla() ile normalize edilmis dist/config.json
+        # (ham orchestrator/config.json DEGIL) -> dist kokune config.json
+        # (paths.ensure_seeded kopyalar).
+        f"--include-data-files={dist / 'config.json'}=config.json",
         # --- lisans katmani: web_server.main() icinde TEMBEL import ---
         # Acikca listele ki biri lazy import'u tasidiginda EXE'de
         # "No module named lisans" cikmasin. lisans_bicim Merkez kopyasidir.
@@ -666,6 +686,7 @@ def main(argv=None) -> int:
 
     # Paket ONCE hazirlanmali: komut uretilecek dosyaya isaret ediyor.
     web_hazirla(obfuscate=not args.obfuscate_yok)
+    tohum_hazirla()
 
     cmd = komutu_olustur(args.out, konsol=args.konsol, ico=_ikon_yolu())
     print("[build] " + " ".join(cmd) + "\n")

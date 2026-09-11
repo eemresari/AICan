@@ -437,6 +437,13 @@ CUDA/Whisper native DLL'leri onefile'da tamamlanamadığı için), yani
 `main.py` ya da içinde dolu `tts_elevenlabs_api_key` olan `config.json`
 bulursa build **durur** (`tests/test_kurucu.py`).
 
+**Tohum config:** `orchestrator/config.json` (sergi makinesinin gerçek ayarları)
+EXE'ye ham girmez; `build.tohum_hazirla()` onu `dist/config.json`'a yazarken
+`test_mode: false` ve `tts_engine: "edge"` zorlar (`build.TOHUM_ZORLA`) — kalıcı
+lisanslı müşteri ilk açılışta tam ürünü ve anahtarsız TTS'i görür; demo lisansta
+`test_mode`'u zaten `web_server` zorla açar. Dolu `tts_elevenlabs_api_key` build'i
+durdurur. Depodaki dosya değişmez.
+
 Sürüm numarası tek yerde: `surum.py`.
 
 Müşteriye giden kılavuz: [`docs/KURULUM.md`](docs/KURULUM.md). Geliştirici
