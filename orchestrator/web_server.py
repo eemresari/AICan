@@ -23,7 +23,7 @@ import time
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
 from game_engine import GameEngine
 from llm_bridge import LLMBridge
@@ -43,9 +43,62 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = Path(paths.config_path())  # bilgi amacli; load/save her cagrida cozer
 ROOT_DIR = BASE_DIR.parent
 WEB_DIR = ROOT_DIR / "web"
-ASSETS_DIR = ROOT_DIR / "assets"
+# assets/ (emoji PNG kareleri) web.pak'a GIRMEZ, her zaman diskten servis edilir:
+# kaynakta depo koku, dondurulmus EXE'de EXE'nin yanindaki dizin.
+ASSETS_DIR = Path(paths.resource_root()) / "assets"
 EMOJI_BASE_DIR = ASSETS_DIR / "emojis"
 EMOJI_FPS = 12  # gesture_engine.EMOJI_FPS ile esit kalmali
+
+# --- Bellekten servis (web.pak) ---------------------------------------------
+# Dondurulmus build'de web/ diskte HAM durmaz; create_app(paket=...) cozulmus
+# sozlugu alir ve /, /control, /<dosya> buradan cevaplanir. Elle MIME tablosu:
+# `mimetypes` Windows kayit defterine bakar ve bazi makinelerde .js'i
+# text/plain doner (tarayici scripti yuklemez, kiosk bos ekran acar).
+MIME = {
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+}
+# Tarayicinin eski surumu onbellekten vermemesi icin (kalici profilli kiosk
+# tarayicisi inatci): bu uzantilar her seferinde yeniden dogrulanir.
+_NO_STORE_UZANTILAR = ("js", "css", "html")
+
+
+def yol_coz(istek: str) -> str:
+    """HTTP yolunu paket sozlugu anahtarina cevir ("app.js?v=1" -> "web/app.js").
+
+    SORGU DIZESI ATILIR: surum etiketi (`?v=`) atilmazsa EXE'de hicbir dosya
+    bulunamaz — diskten servis ederken Flask bunu zaten yapiyordu, bellek
+    yolunda elle yapilmali. `..`, `.` ve bos parca KeyError (caller 404 verir):
+    paket yalniz web/ altini gorur, ai/ ve kok dosyalari URL'den cekilemez.
+    """
+    from urllib.parse import unquote
+
+    yol = unquote(istek.split("?", 1)[0].split("#", 1)[0]).lstrip("/")
+    parcalar = yol.split("/")
+    if not yol or any(p in ("..", ".") or not p for p in parcalar):
+        raise KeyError(f"guvenli olmayan yol: {istek}")
+    return "web/" + "/".join(parcalar)
+
+
+def icerik_turu(ad: str) -> str:
+    _, uzanti = os.path.splitext(ad)
+    return MIME.get(uzanti.lower(), "application/octet-stream")
 
 # Whisper (ses-metin) varsayilanlari. config.json anahtarlari ile ezilir:
 #   whisper_model_size / whisper_device / whisper_compute_type / whisper_initial_prompt
@@ -646,8 +699,21 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
         log.warning("TTS on-isitma hatasi: %s", e)
 
 
-def create_app(config: dict) -> Flask:
+def create_app(config: dict, paket: dict | None = None, demo: bool = False) -> Flask:
+    """Flask uygulamasini kur.
+
+    paket: web.pak'tan cozulmus {"web/app.js": b"...", "ai/...": b"..."} sozlugu.
+           Verilirse /, /control ve /<dosya> BELLEKTEN servis edilir ve ayni
+           sozluk paths.PAKET'e konur ki LLMBridge/GameEngine yukleyicileri de
+           ai/ icerigini oradan okusun (dondurulmus build'de diskte ai/ yoktur).
+           None = kaynaktan calisiyoruz, her sey diskten (bugunku davranis).
+    demo:  demo lisans kilidi (sohbet kapali, yalniz oyunlar). Bu asamada
+           yalniz kabul edilir; davranisi G5'te (bkz. docs/plans).
+    """
+    if paket is not None:
+        paths.PAKET = paket
     app = Flask(__name__, static_folder=None)
+    app.config["_demo"] = bool(demo)
     app_start = time.monotonic()  # /api/health uptime_s icin
 
     bridge = LLMBridge(config, BASE_DIR)
@@ -705,13 +771,41 @@ def create_app(config: dict) -> Flask:
             daemon=True,
         ).start()
 
+    def _bellekten(anahtar: str) -> Response:
+        """Paket sozlugunden servis; yoksa 404 (DISKE DUSULMEZ — lisanssiz
+        icerik gorunmesin). Cache-Control kurali diskten servisle ayni."""
+        govde = paket.get(anahtar)
+        if govde is None:
+            abort(404)
+        resp = Response(govde, mimetype=icerik_turu(anahtar))
+        if anahtar.rsplit(".", 1)[-1].lower() in _NO_STORE_UZANTILAR:
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        return resp
+
+    def _web_dosyasi(ad: str):
+        """web/<ad>: paket varsa bellekten, yoksa diskten (send_from_directory)."""
+        if paket is not None:
+            try:
+                anahtar = yol_coz(ad)
+            except KeyError:
+                abort(404)
+            return _bellekten(anahtar)
+        resp = send_from_directory(str(WEB_DIR), ad)
+        if ad.rsplit(".", 1)[-1].lower() in _NO_STORE_UZANTILAR:
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        return resp
+
     @app.route("/")
     def index():
+        if paket is not None:
+            return _bellekten("web/AI_Body_v2.html")
         return send_from_directory(str(WEB_DIR), "AI_Body_v2.html")
 
     @app.route("/control")
     @app.route("/kontrol")
     def control_panel():
+        if paket is not None:
+            return _bellekten("web/Kontrol_Paneli.html")
         return send_from_directory(str(WEB_DIR), "Kontrol_Paneli.html")
 
     @app.get("/api/gestures")
@@ -1275,14 +1369,12 @@ def create_app(config: dict) -> Flask:
 
     @app.route("/<path:filename>")
     def static_files(filename):
-        # API yollari yukaridaki net route'larda kalmali; catch-all sadece web dosyalari icin.
-        resp = send_from_directory(str(WEB_DIR), filename)
-        # app.js/control.js/*.html degisince tarayici ESKI surumu onbellekten
-        # vermesin (kalici profilli kiosk tarayicisi inatci): her seferinde
-        # yeniden dogrula. Aksi halde JS degisiklikleri "gorunmez" kalir.
-        if filename.rsplit(".", 1)[-1].lower() in ("js", "css", "html"):
-            resp.headers["Cache-Control"] = "no-store, must-revalidate"
-        return resp
+        # API yollari yukaridaki net route'larda kalmali; catch-all sadece web
+        # dosyalari icin. app.js/control.js/*.html degisince tarayici ESKI
+        # surumu onbellekten vermesin (kalici profilli kiosk tarayicisi inatci):
+        # _web_dosyasi js/css/html icin no-store koyar. Aksi halde JS
+        # degisiklikleri "gorunmez" kalir.
+        return _web_dosyasi(filename)
 
     # CORS: sadece localhost; basit acik politika (tek bilgisayar)
     @app.after_request
