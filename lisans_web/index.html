@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<meta charset="utf-8">
+<title>Aican — Lisans</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 28px 32px; background: #12151a; color: #e8ecf1;
+         font: 14px/1.55 "Segoe UI", system-ui, sans-serif; }
+  h1 { font-size: 19px; margin: 0 0 4px; }
+  p.alt { margin: 0 0 20px; color: #93a0b0; }
+  #mesaj { background: #1d2129; border-left: 3px solid #4a90d9;
+           padding: 10px 14px; border-radius: 4px; margin-bottom: 20px; }
+  #mesaj.hata { border-left-color: #d9534f; color: #ffb3b0; }
+  textarea { width: 100%; height: 108px; box-sizing: border-box; resize: none;
+             background: #0d1014; color: #e8ecf1; border: 1px solid #2b313b;
+             border-radius: 4px; padding: 9px 11px; font-family: Consolas,
+             monospace; font-size: 12px; }
+  .dugmeler { display: flex; gap: 10px; margin-top: 16px; }
+  button { flex: 1; padding: 11px; border: 0; border-radius: 4px;
+           font-size: 14px; cursor: pointer; background: #2b313b;
+           color: #e8ecf1; }
+  button.ana { background: #4a90d9; color: #fff; }
+  button:disabled { opacity: .5; cursor: default; }
+</style>
+
+<h1>Lisans anahtari</h1>
+<p class="alt">Anahtar dosyanizi secin ya da size gonderilen metni yapistirin.</p>
+
+<div id="mesaj">{{MESAJ}}</div>
+
+<textarea id="metin" placeholder="LDN1...." spellcheck="false"></textarea>
+
+<div class="dugmeler">
+  <button id="dosya">Lisans dosyasi sec...</button>
+  <button id="onayla" class="ana">Anahtari kullan</button>
+</div>
+
+<script>
+  const kutu = document.getElementById("metin");
+  const mesaj = document.getElementById("mesaj");
+  const dugmeler = [document.getElementById("dosya"),
+                    document.getElementById("onayla")];
+
+  function sonuc(c) {
+    dugmeler.forEach(d => d.disabled = false);
+    if (c && c.ok) return;                 // pencere Python tarafinda kapanir
+    if (c && c.mesaj === "") return;       // dosya secimi iptal edildi
+    mesaj.textContent = (c && c.mesaj) || "Bu anahtar gecerli degil.";
+    mesaj.className = "hata";
+  }
+
+  function calistir(sozVeren) {
+    dugmeler.forEach(d => d.disabled = true);
+    sozVeren().then(sonuc).catch(() => sonuc(null));
+  }
+
+  document.getElementById("dosya").onclick =
+    () => calistir(() => window.pywebview.api.dosya_sec());
+  document.getElementById("onayla").onclick =
+    () => calistir(() => window.pywebview.api.metin_gonder(kutu.value));
+</script>

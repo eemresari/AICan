@@ -20,3 +20,8 @@ edge-tts>=7.0
 # Cevrimdisi yedek: Piper (yerel, CPU). ffmpeg: perde kaydirma + mp3->wav normalize
 piper-tts>=1.4
 imageio-ffmpeg>=0.5
+
+# Lisans penceresi (yalniz o pencere icin; sergi ekrani sistem tarayicisinda acilir).
+pywebview>=5,<6
+# Lisans imzasi (Ed25519) + icerik paketi web.pak (AES-GCM).
+cryptography>=42,<47

@@ -23,10 +23,11 @@ import time
 import webbrowser
 from pathlib import Path
 
-from flask import Flask, Response, jsonify, request, send_from_directory
+from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
 from game_engine import GameEngine
 from llm_bridge import LLMBridge
+import paths
 from session_logger import SessionLogger
 
 logging.basicConfig(
@@ -37,12 +38,67 @@ logging.basicConfig(
 log = logging.getLogger("web_server")
 
 BASE_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = BASE_DIR / "config.json"
+# Yazilan her sey (config, log, onbellek, tarayici profili) paths uzerinden:
+# kaynakta bugunku konumlar, dondurulmus EXE'de %LOCALAPPDATA%\Aican.
+CONFIG_PATH = Path(paths.config_path())  # bilgi amacli; load/save her cagrida cozer
 ROOT_DIR = BASE_DIR.parent
 WEB_DIR = ROOT_DIR / "web"
-ASSETS_DIR = ROOT_DIR / "assets"
+# assets/ (emoji PNG kareleri) web.pak'a GIRMEZ, her zaman diskten servis edilir:
+# kaynakta depo koku, dondurulmus EXE'de EXE'nin yanindaki dizin.
+ASSETS_DIR = Path(paths.resource_root()) / "assets"
 EMOJI_BASE_DIR = ASSETS_DIR / "emojis"
 EMOJI_FPS = 12  # gesture_engine.EMOJI_FPS ile esit kalmali
+
+# --- Bellekten servis (web.pak) ---------------------------------------------
+# Dondurulmus build'de web/ diskte HAM durmaz; create_app(paket=...) cozulmus
+# sozlugu alir ve /, /control, /<dosya> buradan cevaplanir. Elle MIME tablosu:
+# `mimetypes` Windows kayit defterine bakar ve bazi makinelerde .js'i
+# text/plain doner (tarayici scripti yuklemez, kiosk bos ekran acar).
+MIME = {
+    ".js": "application/javascript; charset=utf-8",
+    ".mjs": "application/javascript; charset=utf-8",
+    ".html": "text/html; charset=utf-8",
+    ".css": "text/css; charset=utf-8",
+    ".json": "application/json; charset=utf-8",
+    ".txt": "text/plain; charset=utf-8",
+    ".svg": "image/svg+xml",
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".ico": "image/x-icon",
+    ".wav": "audio/wav",
+    ".mp3": "audio/mpeg",
+    ".ogg": "audio/ogg",
+    ".woff2": "font/woff2",
+    ".woff": "font/woff",
+}
+# Tarayicinin eski surumu onbellekten vermemesi icin (kalici profilli kiosk
+# tarayicisi inatci): bu uzantilar her seferinde yeniden dogrulanir.
+_NO_STORE_UZANTILAR = ("js", "css", "html")
+
+
+def yol_coz(istek: str) -> str:
+    """HTTP yolunu paket sozlugu anahtarina cevir ("app.js?v=1" -> "web/app.js").
+
+    SORGU DIZESI ATILIR: surum etiketi (`?v=`) atilmazsa EXE'de hicbir dosya
+    bulunamaz — diskten servis ederken Flask bunu zaten yapiyordu, bellek
+    yolunda elle yapilmali. `..`, `.` ve bos parca KeyError (caller 404 verir):
+    paket yalniz web/ altini gorur, ai/ ve kok dosyalari URL'den cekilemez.
+    """
+    from urllib.parse import unquote
+
+    yol = unquote(istek.split("?", 1)[0].split("#", 1)[0]).lstrip("/")
+    parcalar = yol.split("/")
+    if not yol or any(p in ("..", ".") or not p for p in parcalar):
+        raise KeyError(f"guvenli olmayan yol: {istek}")
+    return "web/" + "/".join(parcalar)
+
+
+def icerik_turu(ad: str) -> str:
+    _, uzanti = os.path.splitext(ad)
+    return MIME.get(uzanti.lower(), "application/octet-stream")
 
 # Whisper (ses-metin) varsayilanlari. config.json anahtarlari ile ezilir:
 #   whisper_model_size / whisper_device / whisper_compute_type / whisper_initial_prompt
@@ -252,11 +308,12 @@ HAZIR_BEKLE_TEXT = "Hazır olunca 'başla' de ya da butona dokun :)"
 
 def load_config() -> dict:
     # utf-8-sig: elle duzenlenen config Notepad/PowerShell'den BOM'lu kaydedilse de okunur.
-    return json.loads(CONFIG_PATH.read_text(encoding="utf-8-sig"))
+    # Yol her cagrida cozulur (AICAN_DATA_ROOT / dondurulmus kok testte degisebilir).
+    return json.loads(Path(paths.config_path()).read_text(encoding="utf-8-sig"))
 
 
 def save_config(cfg: dict) -> None:
-    CONFIG_PATH.write_text(
+    Path(paths.config_path()).write_text(
         json.dumps(cfg, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
@@ -277,18 +334,16 @@ class WhisperState:
         return self.model is not None and self.status == "hazir"
 
 
-def _add_cuda_dll_dirs() -> None:
-    """pip ile kurulan nvidia-* wheel'larinin (cublas/cudnn) DLL klasorlerini
-    Windows DLL arama yoluna ekler.
+def _cuda_dll_kokleri() -> list:
+    """CUDA DLL'lerinin arandigi `nvidia/` kok dizinleri.
 
-    KRITIK: ctranslate2 cublas64_12.dll / cudnn dll'lerini GEC yukler — model
-    CUDA'ya sorunsuz 'yuklenir' (status=hazir) ama ILK transkripsiyonda
-    "Library cublas64_12.dll is not found" ile coker. Sistem CUDA Toolkit'i
-    kurulu degilse bile pip'teki nvidia-cublas-cu12 + nvidia-cudnn-cu12
-    yeterlidir; burada onlarin bin/ klasorlerini hem add_dll_directory hem
-    PATH'e ekleriz (ct2 PATH uzerinden LoadLibrary yapar)."""
-    if os.name != "nt":
-        return
+    Kaynaktan calisirken pip'in kurdugu site-packages/nvidia (venv + global
+    + purelib). DONDURULMUS build'de site-packages YOKTUR: build.py
+    (--include-package-data=nvidia + cuda_dll_tamamla) DLL'leri EXE'nin
+    yanina `nvidia/<cublas|cudnn>/bin` olarak koyar; resource_root() oradir.
+    """
+    if paths.FROZEN:
+        return [Path(paths.resource_root()) / "nvidia"]
     import site
     import sysconfig
     roots = set()
@@ -297,11 +352,23 @@ def _add_cuda_dll_dirs() -> None:
     except Exception:  # noqa: BLE001 — venv/embedded python'da olmayabilir
         pass
     roots.add(sysconfig.get_paths().get("purelib", ""))
+    return [Path(r) / "nvidia" for r in sorted(roots) if r]
+
+
+def _add_cuda_dll_dirs() -> None:
+    """nvidia-* (cublas/cudnn) DLL klasorlerini Windows DLL arama yoluna ekler.
+
+    KRITIK: ctranslate2 cublas64_12.dll / cudnn dll'lerini GEC yukler — model
+    CUDA'ya sorunsuz 'yuklenir' (status=hazir) ama ILK transkripsiyonda
+    "Library cublas64_12.dll is not found" ile coker. Sistem CUDA Toolkit'i
+    kurulu degilse bile pip'teki nvidia-cublas-cu12 + nvidia-cudnn-cu12
+    yeterlidir; burada onlarin bin/ klasorlerini hem add_dll_directory hem
+    PATH'e ekleriz (ct2 PATH uzerinden LoadLibrary yapar). Nerede aranacagi
+    _cuda_dll_kokleri'nde (kaynak: site-packages, EXE: dist/nvidia)."""
+    if os.name != "nt":
+        return
     added = []
-    for root in roots:
-        if not root:
-            continue
-        nv = Path(root) / "nvidia"
+    for nv in _cuda_dll_kokleri():
         if not nv.is_dir():
             continue
         for bin_dir in sorted(nv.glob("*/bin")):
@@ -609,7 +676,7 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
                 model=config.get("tts_elevenlabs_model", "eleven_flash_v2_5"),
                 language=config.get("tts_elevenlabs_language", "tr"),
                 monthly_cap=config.get("tts_elevenlabs_monthly_credit_cap", 32000),
-                usage_path=BASE_DIR / "tts" / "elevenlabs_usage.json",
+                usage_path=paths.elevenlabs_usage_path(),
             )
             if config.get("tts_fallback_enabled", True):
                 # 3 katman: elevenlabs -> edge -> piper.
@@ -642,14 +709,48 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
         log.warning("TTS on-isitma hatasi: %s", e)
 
 
-def create_app(config: dict) -> Flask:
+def _warmup_baslat(bridge: LLMBridge) -> threading.Thread:
+    """Ollama warmup'ini arka plana at. Ayri fonksiyon: demo kilidi testi
+    'demo'da hic cagrilmadi' diye bunu sayar."""
+    def _warm():
+        ok = bridge.warmup()
+        log.info("Warmup: %s", "OK" if ok else "fail")
+    t = threading.Thread(target=_warm, daemon=True)
+    t.start()
+    return t
+
+
+def create_app(config: dict, paket: dict | None = None, demo: bool = False) -> Flask:
+    """Flask uygulamasini kur.
+
+    paket: web.pak'tan cozulmus {"web/app.js": b"...", "ai/...": b"..."} sozlugu.
+           Verilirse /, /control ve /<dosya> BELLEKTEN servis edilir ve ayni
+           sozluk paths.PAKET'e konur ki LLMBridge/GameEngine yukleyicileri de
+           ai/ icerigini oradan okusun (dondurulmus build'de diskte ai/ yoktur).
+           None = kaynaktan calisiyoruz, her sey diskten (bugunku davranis).
+    demo:  DEMO LISANS KILIDI (sohbet kapali, yalniz oyunlar). Mevcut test modu
+           altyapisi ZORLA ACIK ve KILITLI tutulur: POST /api/test_mode 403,
+           GET /api/test_mode kilitli:true (frontend 'g' tusunu/toggle'i
+           gizler), Ollama warmup baslatilmaz, /api/models|model|pull 403.
+           /api/send test modu yolundan TEST_SOHBET_KAPALI_TEXT doner — yeni
+           metin yok. Kaynaktan calistirmada main() demo=False verir;
+           config.json'daki test_mode oldugu gibi gecerlidir.
+    """
+    if paket is not None:
+        paths.PAKET = paket
+    demo = bool(demo)
     app = Flask(__name__, static_folder=None)
+    app.config["_demo"] = demo
     app_start = time.monotonic()  # /api/health uptime_s icin
 
     bridge = LLMBridge(config, BASE_DIR)
     game = GameEngine(bridge=bridge)  # TKM deterministik; kelime turetme (ileride) LLM kullanir
     # Test modu durumu (config.json'dan; 'g' tusu / POST /api/test_mode degistirir).
-    test_mode = {"on": bool(config.get("test_mode", False))}
+    # Demo lisansta config ne derse desin ACIK: sohbet kapali, yalniz TEST_OYUNLAR.
+    test_mode = {"on": bool(config.get("test_mode", False)) or demo}
+    if demo:
+        log.info("Demo lisans: test modu zorla ACIK ve kilitli (sohbet kapali, "
+                 "Ollama warmup yok)")
     if test_mode["on"]:
         game.izinli_oyunlar = TEST_OYUNLAR
         game.voice_only = True
@@ -659,20 +760,18 @@ def create_app(config: dict) -> Flask:
     # Aktif oyuna en son girdi gelen an: /api/session/new'in "canli oyunu koruma"
     # karari bunu kullanir (sayfa yenilenip oyun sahipsiz kaldiysa eskimis sayilir).
     game_last_input = {"t": 0.0}
-    gestures_path = (BASE_DIR / config["gestures_path"]).resolve()
-    log_path = (BASE_DIR / config.get("session_log_path", "../logs/session.log")).resolve()
+    gestures_rel = paths.kaynak_rel(config["gestures_path"])
+    log_path = Path(paths.session_log_path(config.get("session_log_path")))
     logger = SessionLogger(log_path, config["ollama_url"], bridge.model)
     logger.start()
     log.info("Oturum logu: %s", log_path)
     # Oyun baslangic/bitis ozetleri de ayni oturum loguna yazilsin (gozlem).
     game.session_logger = logger
 
-    # Tek seferlik warmup arka planda
-    if config.get("warmup_on_start", True):
-        def _warm():
-            ok = bridge.warmup()
-            log.info("Warmup: %s", "OK" if ok else "fail")
-        threading.Thread(target=_warm, daemon=True).start()
+    # Tek seferlik warmup arka planda. Demo'da HIC baslamaz: Ollama demo
+    # kurulumunda yoktur, sohbet zaten kapali — bosuna baglanti denemesi olmasin.
+    if config.get("warmup_on_start", True) and not demo:
+        _warmup_baslat(bridge)
 
     # Whisper modeli arka planda yuklensin — HTTP istekleri bunu beklemez.
     whisper_state = WhisperState()
@@ -690,7 +789,7 @@ def create_app(config: dict) -> Flask:
     from tts.cache import WavCache
     tts_state = TTSState()
     tts_cache = WavCache(
-        BASE_DIR / "tts" / "cache",
+        paths.tts_cache_dir(),
         max_files=int(config.get("tts_cache_max", 500)),
         enabled=bool(config.get("tts_cache_enabled", True)),
     )
@@ -701,18 +800,47 @@ def create_app(config: dict) -> Flask:
             daemon=True,
         ).start()
 
+    def _bellekten(anahtar: str) -> Response:
+        """Paket sozlugunden servis; yoksa 404 (DISKE DUSULMEZ — lisanssiz
+        icerik gorunmesin). Cache-Control kurali diskten servisle ayni."""
+        govde = paket.get(anahtar)
+        if govde is None:
+            abort(404)
+        resp = Response(govde, mimetype=icerik_turu(anahtar))
+        if anahtar.rsplit(".", 1)[-1].lower() in _NO_STORE_UZANTILAR:
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        return resp
+
+    def _web_dosyasi(ad: str):
+        """web/<ad>: paket varsa bellekten, yoksa diskten (send_from_directory)."""
+        if paket is not None:
+            try:
+                anahtar = yol_coz(ad)
+            except KeyError:
+                abort(404)
+            return _bellekten(anahtar)
+        resp = send_from_directory(str(WEB_DIR), ad)
+        if ad.rsplit(".", 1)[-1].lower() in _NO_STORE_UZANTILAR:
+            resp.headers["Cache-Control"] = "no-store, must-revalidate"
+        return resp
+
     @app.route("/")
     def index():
+        if paket is not None:
+            return _bellekten("web/AI_Body_v2.html")
         return send_from_directory(str(WEB_DIR), "AI_Body_v2.html")
 
     @app.route("/control")
     @app.route("/kontrol")
     def control_panel():
+        if paket is not None:
+            return _bellekten("web/Kontrol_Paneli.html")
         return send_from_directory(str(WEB_DIR), "Kontrol_Paneli.html")
 
     @app.get("/api/gestures")
     def api_gestures():
-        return send_from_directory(str(gestures_path.parent), gestures_path.name)
+        # ai/ icerigi diskte olmayabilir (web.pak); paths.kaynak_oku simi.
+        return Response(paths.kaynak_oku(gestures_rel), mimetype="application/json")
 
     @app.get("/api/emoji_manifest")
     def api_emoji_manifest():
@@ -784,12 +912,30 @@ def create_app(config: dict) -> Flask:
             },
         })
 
+    # ——— Demo kilidi ————————————————————————————————————————————
+    def _demo_kilidi():
+        """Demo lisansta kapali uclarin tek yaniti. Kontrol paneli 403'u
+        'hata: demo_kilidi' diye loglar, kiosk bundan etkilenmez."""
+        return jsonify({"error": "demo_kilidi"}), 403
+
+    @app.get("/api/filigran")
+    def api_filigran():
+        """Demo lisans filigrani (kurum — tarih — #no); kalici lisansta ve
+        kaynaktan calistirmada bos. app.js acilista bir kez okur."""
+        resp = jsonify({"metin": FILIGRAN})
+        resp.headers["Cache-Control"] = "no-store"
+        return resp
+
     @app.get("/api/models")
     def api_models():
+        if demo:
+            return _demo_kilidi()
         return jsonify({"models": bridge.list_local_models(), "active": bridge.model})
 
     @app.post("/api/model")
     def api_set_model():
+        if demo:
+            return _demo_kilidi()
         payload = request.get_json(silent=True) or {}
         name = (payload.get("name") or "").strip()
         if not name:
@@ -807,6 +953,8 @@ def create_app(config: dict) -> Flask:
 
     @app.post("/api/pull")
     def api_pull():
+        if demo:
+            return _demo_kilidi()
         payload = request.get_json(silent=True) or {}
         name = (payload.get("name") or "").strip()
         if not name:
@@ -923,12 +1071,17 @@ def create_app(config: dict) -> Flask:
     # ——— Test modu (sergi test gunu: sinirli menu + sohbet kapali) ————————
     @app.get("/api/test_mode")
     def api_test_mode_get():
-        return jsonify({"on": test_mode["on"], "games": list(TEST_OYUNLAR)})
+        # kilitli: demo lisans — frontend 'g' tusunu ve TEST toggle'ini gizler.
+        return jsonify({"on": test_mode["on"], "games": list(TEST_OYUNLAR),
+                        "kilitli": demo})
 
     @app.post("/api/test_mode")
     def api_test_mode_set():
         """Test modunu ac/kapa. Body {"on": bool} verilirse o degere, verilmezse
-        toggle. Aktif oyun sifirlanir (menude eski butonlar kalmasin)."""
+        toggle. Aktif oyun sifirlanir (menude eski butonlar kalmasin).
+        Demo lisansta 403: mod hep ACIK, degistirilemez (config'e de yazilmaz)."""
+        if demo:
+            return _demo_kilidi()
         payload = request.get_json(silent=True) or {}
         on = payload.get("on")
         on = (not test_mode["on"]) if on is None else bool(on)
@@ -1190,7 +1343,7 @@ def create_app(config: dict) -> Flask:
         # model/ayar adaylarini ayni set uzerinde kiyaslamak icin.
         if config.get("whisper_debug_save_audio", False):
             try:
-                dbg_dir = ROOT_DIR / "logs" / "stt_debug"
+                dbg_dir = Path(paths.stt_debug_dir())
                 dbg_dir.mkdir(parents=True, exist_ok=True)
                 stamp = time.strftime("%Y%m%d-%H%M%S") + f"-{int(time.time() * 1000) % 1000:03d}"
                 (dbg_dir / f"{stamp}.webm").write_bytes(audio_bytes)
@@ -1270,14 +1423,12 @@ def create_app(config: dict) -> Flask:
 
     @app.route("/<path:filename>")
     def static_files(filename):
-        # API yollari yukaridaki net route'larda kalmali; catch-all sadece web dosyalari icin.
-        resp = send_from_directory(str(WEB_DIR), filename)
-        # app.js/control.js/*.html degisince tarayici ESKI surumu onbellekten
-        # vermesin (kalici profilli kiosk tarayicisi inatci): her seferinde
-        # yeniden dogrula. Aksi halde JS degisiklikleri "gorunmez" kalir.
-        if filename.rsplit(".", 1)[-1].lower() in ("js", "css", "html"):
-            resp.headers["Cache-Control"] = "no-store, must-revalidate"
-        return resp
+        # API yollari yukaridaki net route'larda kalmali; catch-all sadece web
+        # dosyalari icin. app.js/control.js/*.html degisince tarayici ESKI
+        # surumu onbellekten vermesin (kalici profilli kiosk tarayicisi inatci):
+        # _web_dosyasi js/css/html icin no-store koyar. Aksi halde JS
+        # degisiklikleri "gorunmez" kalir.
+        return _web_dosyasi(filename)
 
     # CORS: sadece localhost; basit acik politika (tek bilgisayar)
     @app.after_request
@@ -1341,7 +1492,7 @@ def _find_kiosk_browser():
 
 
 def open_browsers(host: str, port: int, delay_sec: float = 1.2,
-                  open_control: bool = True, kiosk: bool = True) -> None:
+                  open_control: bool = True, kiosk: bool = True) -> threading.Thread:
     """Sunucu kalktiktan sonra sekmeleri ac.
 
     open_control=False (sergi profili: web_open_control=false): YALNIZ sergi
@@ -1365,7 +1516,7 @@ def open_browsers(host: str, port: int, delay_sec: float = 1.2,
                 # Eski calistirmadan kalan sergi sayfasi 'hayalet istemci' olarak
                 # oturum sifirlayip aktif oyunu bozabiliyor — once onu kapat.
                 _kill_stale_kiosk()
-                profil = Path(__file__).resolve().parent.parent / ".tarayici_profili"
+                profil = paths.browser_profile_dir()
                 try:
                     subprocess.Popen([
                         exe,
@@ -1391,7 +1542,9 @@ def open_browsers(host: str, port: int, delay_sec: float = 1.2,
                 webbrowser.open_new_tab(urls[1])
         except Exception as e:
             log.warning("Tarayici acilamadi: %s — manuel ac: %s", e, base)
-    threading.Thread(target=_open, daemon=True).start()
+    t = threading.Thread(target=_open, daemon=True)
+    t.start()
+    return t
 
 
 def _port_in_use(host: str, port: int) -> bool:
@@ -1407,30 +1560,197 @@ def _port_in_use(host: str, port: int) -> bool:
         return False
 
 
-def main() -> None:
-    config = load_config()
-    host = "127.0.0.1"
-    port = int(config.get("web_port", 5057))
-    if _port_in_use(host, port):
-        log.error("Port %d zaten kullanimda — AICAN muhtemelen ACIK. Ikinci kopya "
-                  "baslatilmadi. Once eski pencereyi kapatin (veya gorev "
-                  "yoneticisinden python'u sonlandirin).", port)
-        return
-    app = create_app(config)
-    open_control = bool(config.get("web_open_control", True))
-    kiosk = bool(config.get("web_kiosk_browser", True))
-    log.info("AI Body web sunucusu: http://%s:%d", host, port)
-    log.info("  Sergi:          http://%s:%d/", host, port)
-    if open_control:
-        log.info("  Kontrol paneli: http://%s:%d/control", host, port)
-    else:
-        log.info("  Kontrol paneli: ACILMAYACAK (web_open_control=false — sergi modu)")
-    open_browsers(host, port, open_control=open_control, kiosk=kiosk)
+# ——— Lisans kapisi (yalniz dondurulmus EXE) ————————————————————————
+# Demo lisansta sergi ekraninin kosesinde gorunen metin ("Kurum — 01.01.2027 — #7").
+# Kalici lisansta ve kaynaktan calistirmada BOS; GET /api/filigran ile okunur.
+# Modul degiskeni: lisans_kapisi yazar, create_app'in ucu okur (testler ezer).
+FILIGRAN = ""
+
+
+class LisansReddedildi(SystemExit):
+    """Lisans kapisi gecilemedi; uygulama acilmadan durur."""
+
+
+def _fatal(title: str, message: str) -> None:
+    """Olumcul hatayi KULLANICIYA goster.
+
+    Dagitilan EXE konsolsuz derlenir (alici cift tiklayinca siyah bir pencere
+    degil sergiyi gormeli). Bedeli: bir acilis hatasi hicbir yerde gorunmez —
+    alici cift tiklar, hicbir sey olmaz. Bu yuzden olumcul hatalar Windows
+    mesaj kutusuyla soylenir; ayrinti zaten logs/'a yaziliyor.
+    """
+    print(message)
     try:
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, message, title, 0x10)   # MB_ICONERROR
+    except Exception:      # noqa: BLE001 — Windows disi / konsol var: print yeter
+        pass
+
+
+def filigran_metni(yuk) -> str:
+    """Sergi kosesinde gorunecek metin. Bos dize = filigran cizilmez.
+
+    KALICI LISANSTA BOS: satilan urunde alicinin adi ekranda durmaz. Havuz
+    anahtarinda kurum adi yoktur; izlenebilirlik #anahtar_no ile saglanir.
+    Yuk alanlari lisans_bicim/Merkez ile ayni: tip, kurum, son_kullanim_ts,
+    anahtar_no.
+    """
+    import datetime as _dt
+
+    if not yuk or yuk.get("tip") != "demo":
+        return ""
+    kurum = (yuk.get("kurum") or "").strip() or "Demo"
+    parcalar = [kurum]
+    son = yuk.get("son_kullanim_ts")
+    if son:
+        parcalar.append(_dt.datetime.fromtimestamp(son).strftime("%d.%m.%Y"))
+    parcalar.append(f"#{yuk.get('anahtar_no', '?')}")
+    return " — ".join(parcalar)
+
+
+def lisans_kapisi(donmus: bool) -> tuple:
+    """(icerik_anahtari, yuk) don.
+
+    KAYNAKTAN CALISTIRMADA KAPI YOKTUR: (None, {"tip": "kalici"}) doner, parmak
+    izi okunmaz, pencere acilmaz, web.pak aranmaz — gelistirme dongusu ve
+    config.json'daki test_mode aynen.
+
+    DONDURULMUS EXE'DE create_app'ten ONCE: mikrofon/GPU/Ollama thread'leri
+    orada basliyor; lisanssiz kullanicinin donanimina dokunulmaz. Sunucu
+    yalniz bu anahtarla cozulen paketi servis eder.
+
+    Ekran kapatilirsa uygulama DURUR: "anahtar girmedim ama sergi acildi"
+    durumu, korunmak istenen seyin ta kendisidir.
+    """
+    global FILIGRAN
+
+    if not donmus:
+        FILIGRAN = ""
+        return None, {"tip": "kalici"}
+
+    import base64
+
+    import lisans_durum
+    import lisans_ekrani
+    import parmak_izi
+
+    try:
+        izi = parmak_izi.al()
+    except parmak_izi.ParmakIziYok as e:
+        raise LisansReddedildi(f"Aican acilamadi: {e}") from None
+
+    kayit = lisans_durum.oku()
+    durum, yuk = lisans_ekrani.durumu_belirle(kayit, izi)
+
+    if durum != "gecerli":
+        yuk = lisans_ekrani.ac(lisans_ekrani.DURUMLAR[durum])
+        if not yuk:
+            raise LisansReddedildi("Aican acilamadi: gecerli bir lisans yok.")
+        kayit = lisans_durum.oku()
+
+    if kayit:
+        lisans_durum.saati_ilerlet(kayit)
+    FILIGRAN = filigran_metni(yuk)
+    return base64.b64decode(yuk["icerik_anahtari"]), yuk
+
+
+def _paketi_yukle(icerik_anahtari):
+    """web.pak'i BELLEGE coz; kaynaktan calistirmada ya da anahtarsiz None.
+
+    Diske hicbir sey yazilmaz. None donerse create_app diskten servis eder —
+    bu yalniz kaynaktan calistirmada dogru; dondurulmus build'de web/ ve ai/
+    diskte yoktur, yani lisanssiz icerik gorunmez.
+
+    Paket no cozmeden once okunur ve lisans.PAKET_NO ile karsilastirilir:
+    uyusmazsa sebep "gecersiz anahtar" degil, EXE ile web.pak'in ayri
+    surumlerden gelmesidir (bozuk/karisik kurulum) — mesaj bunu soyler.
+    """
+    if not paths.FROZEN or icerik_anahtari is None:
+        return None
+    import lisans
+    import web_paket
+
+    ham_yol = os.path.join(paths.resource_root(), "web.pak")
+    try:
+        with open(ham_yol, "rb") as f:
+            veri = f.read()
+        pak_no = web_paket.paket_no_oku(veri)
+        if pak_no != lisans.PAKET_NO:
+            raise LisansReddedildi(
+                f"Aican acilamadi: icerik paketi surumu uyusmuyor "
+                f"(web.pak {pak_no}, program {lisans.PAKET_NO}).\n"
+                "Kurulum bozuk olabilir; kurucuyu yeniden calistirin.")
+        dosyalar = web_paket.coz(veri, icerik_anahtari)
+    except LisansReddedildi:
+        raise
+    except Exception as exc:      # noqa: BLE001
+        raise LisansReddedildi(
+            f"Aican acilamadi: icerik paketi cozulemedi ({exc!r}).\n"
+            "Kurulum bozuk olabilir; kurucuyu yeniden calistirin.") from None
+    log.info("Icerik paketi bellege alindi: %d dosya", len(dosyalar))
+    return dosyalar
+
+
+def main() -> None:
+    """Acilis sirasi (tests/test_lisans_kapisi.py kilitler):
+
+      ensure_seeded -> load_config -> _port_in_use -> lisans kapisi ->
+      paket -> create_app -> open_browsers -> app.run
+
+    ensure_seeded ILK: dondurulmus EXE'de config.json veri kokunde durur ve
+    ilk acilista henuz yoktur; port numarasi ondan okunur. Yalniz dizin acar
+    ve tohum kopyalar — lisanstan once yapilmasinda sakinca yok.
+    Port kontrolu kapidan ONCE: sergi zaten aciksa (ikinci cift tik) lisans
+    penceresi cikmaz, calisan sunucuya taze sekmeler acilir.
+    """
+    app = None
+    try:
+        paths.ensure_seeded()
+        config = load_config()
+        host = "127.0.0.1"
+        port = int(config.get("web_port", 5057))
+        open_control = bool(config.get("web_open_control", True))
+        kiosk = bool(config.get("web_kiosk_browser", True))
+        if _port_in_use(host, port):
+            # Sunucu zaten calisiyor (ikinci kopya). Ikinci sunucu KALKMAZ
+            # (Windows'ta ayni porta iki sunucu 'basariyla' baglanir, istekler
+            # rastgele kopyaya gider). Kiosk kapanmis olabilir: mevcut sunucuya
+            # taze sekmeler acip cikiyoruz. Lisans ekrani bu yolda ASLA cikmaz.
+            log.warning("Port %d zaten kullanimda — AICAN zaten ACIK. Ikinci kopya "
+                        "baslatilmadi; calisan sunucuya tarayici sekmeleri aciliyor.",
+                        port)
+            open_browsers(host, port, delay_sec=0.2,
+                          open_control=open_control, kiosk=kiosk).join(15)
+            return
+        icerik_anahtari, yuk = lisans_kapisi(paths.FROZEN)
+        paket = _paketi_yukle(icerik_anahtari)
+        app = create_app(config, paket, demo=(yuk.get("tip") == "demo"))
+        log.info("AI Body web sunucusu: http://%s:%d", host, port)
+        log.info("  Sergi:          http://%s:%d/", host, port)
+        if open_control:
+            log.info("  Kontrol paneli: http://%s:%d/control", host, port)
+        else:
+            log.info("  Kontrol paneli: ACILMAYACAK (web_open_control=false — sergi modu)")
+        open_browsers(host, port, open_control=open_control, kiosk=kiosk)
         # use_reloader=False -> warmup ve iki sekme acmayi tek seferde calistirir
         app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
+    except LisansReddedildi as e:
+        # Konsolsuz EXE'de sebep gorunsun (parmak izi yok / paket cozulemedi).
+        # Pencereyi kullanicinin kendisi kapattiysa da kisa bir not zarar vermez.
+        if paths.FROZEN:
+            _fatal("Aican acilamadi", str(e) or "Gecerli bir lisans yok.")
+        raise
+    except SystemExit:
+        raise
+    except Exception:
+        import traceback
+        _fatal("Aican baslatilamadi",
+               "Aican acilirken beklenmeyen bir hata olustu.\n\n"
+               + traceback.format_exc(limit=3)
+               + f"\nAyrintili kayit: {paths.log_dir()}")
+        raise
     finally:
-        logger = app.config.get("_logger")
+        logger = app.config.get("_logger") if app is not None else None
         if logger:
             try:
                 logger.end()

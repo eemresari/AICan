@@ -57,3 +57,16 @@ orchestrator/tts/voices/*.onnx
 orchestrator/tts/voices/*.onnx.json
 # kalite testi ciktilari
 seslendirme_demo/
+
+# Lisans hatti (bkz. docs/plans/2026-09-11-lisans-ve-kurucu-entegrasyonu.md)
+# Sirlar ve makineye bagli dosyalar ASLA depoya girmez; Merkez ~/.luden-lisans/ altinda tutar.
+.luden-lisans/
+*.key
+lisans.dat
+lisanslar.json
+aktivasyon.dat
+# Build ciktilari (Nuitka standalone + icerik paketi)
+dist/
+build/
+web.pak
+web-hazir/

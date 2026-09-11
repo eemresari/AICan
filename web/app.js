@@ -397,6 +397,10 @@
 
   // ——— Test modu göstergesi ('g' tuşu; durum backend'de) ————————————
   let testModeOn = false;
+  // Demo lisans kilidi (GET /api/test_mode kilitli:true): mod hep açık ve
+  // değiştirilemez — 'g' tuşu etkisiz, "TEST MODU" rozeti gizli (köşede zaten
+  // filigran var, ziyaretçi "test" yazısı görmesin).
+  let testModeLocked = false;
   let testBadgeEl = null;
   function setTestBadge(on) {
     const changed = testModeOn !== !!on;
@@ -411,10 +415,35 @@
       testBadgeEl.textContent = 'TEST MODU';
       document.body.appendChild(testBadgeEl);
     }
-    testBadgeEl.style.display = testModeOn ? 'block' : 'none';
+    testBadgeEl.style.display = (testModeOn && !testModeLocked) ? 'block' : 'none';
+  }
+
+  // ——— Demo filigranı (GET /api/filigran; sapma #4) ————————————————
+  // Demo lisansta köşeye "Kurum — tarih — #no" yazılır; kalıcı lisansta ve
+  // kaynaktan çalıştırmada metin boş gelir → hiçbir şey çizilmez. Tek seferlik
+  // okuma; sunucu yoksa sessizce geçilir. Sergi ekranı büyük: küçük, yarı
+  // saydam, tıklanamaz; sağ alt köşe (sol altta TEST rozeti / durum var).
+  let filigranEl = null;
+  async function loadFiligran() {
+    try {
+      const r = await fetch('/api/filigran', { cache: 'no-store' });
+      if (!r.ok) return;
+      const d = await r.json();
+      const metin = d && typeof d.metin === 'string' ? d.metin.trim() : '';
+      if (!metin || filigranEl) return;
+      filigranEl = document.createElement('div');
+      filigranEl.id = 'filigran';
+      filigranEl.style.cssText =
+        'position:fixed;right:18px;bottom:14px;z-index:60;pointer-events:none;user-select:none;' +
+        'font:600 14px/1.2 "Segoe UI",system-ui,sans-serif;letter-spacing:0.02em;' +
+        'color:rgba(255,255,255,0.55);text-shadow:0 1px 2px rgba(0,0,0,0.8);';
+      filigranEl.textContent = metin;
+      document.body.appendChild(filigranEl);
+    } catch (_) { /* filigran çizilmez */ }
   }
   let testToggleBusy = false;
   async function toggleTestModeFromDisplay() {
+    if (testModeLocked) return;    // demo lisans: mod kilitli, 'g' etkisiz
     if (testToggleBusy) return;    // tuş basılı tutulursa istek seli olmasın
     testToggleBusy = true;
     try {
@@ -1292,12 +1321,13 @@
     }
   }
 
-  // Aynı /api/config yanıtından test modu durumunu da al (rozet açılışta doğru olsun).
+  // Test modu durumu + demo kilidi (rozet açılışta doğru olsun, 'g' kilitliyse sussun).
   async function loadTestModeState() {
     try {
-      const r = await fetch('/api/config');
+      const r = await fetch('/api/test_mode');
       const d = await r.json();
-      if (d && typeof d.test_mode === 'boolean') setTestBadge(d.test_mode);
+      if (d && typeof d.kilitli === 'boolean') testModeLocked = d.kilitli;
+      if (d && typeof d.on === 'boolean') setTestBadge(d.on);
     } catch (_) { /* rozet kapalı kalır */ }
   }
 
@@ -1952,6 +1982,7 @@
     checkTtsStatus();
     await loadVoiceInputConfig();
     await loadTestModeState();
+    loadFiligran();   // demo lisans köşe yazısı (boşsa hiçbir şey çizmez)
     // Rozet/attract metinleri sunucu durumuyla senkron kalsın: açılış fetch'i
     // başarısız olsa ya da mod başka yerden değişse ~10 sn'de kendini onarır.
     setInterval(loadTestModeState, 10000);

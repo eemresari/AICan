@@ -24,8 +24,8 @@ import json
 import logging
 import random
 import re
-from pathlib import Path
 
+import paths
 from word_llm import son_harf, temiz_kelime
 
 log = logging.getLogger(__name__)
@@ -131,7 +131,9 @@ _TR_COMMON_WORDS = frozenset({
 
 # ——— Kategorili kelime havuzu (AI temali kelimeler buradan secilir) ————
 # AI kelimeleri edebiyat + tarih + bilim havuzlarinin BIRLESIMINDEN gelir.
-_DEFAULT_CATS_PATH = Path(__file__).resolve().parent.parent / "ai" / "word_categories.json"
+# ai/*.json yollari depo kokune gore POSIX; paths.kaynak_oku dondurulmus build'de
+# bunlari web.pak'tan cozulmus bellekten, kaynakta diskten okur.
+_DEFAULT_CATS_PATH = "ai/word_categories.json"
 
 # AI'nin temali kelime havuzunu olusturan kategoriler (birlestirilir).
 _THEMED_CATEGORIES = ("edebiyat", "tarih", "bilim")
@@ -154,7 +156,7 @@ def _load_word_categories(path):
     try:
         # utf-8-sig: BOM'lu dosya da kabul (Windows editorleri BOM ekleyebiliyor;
         # strict utf-8 BOM'da patlar ve veri sessizce yedege duserdi).
-        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        data = json.loads(paths.kaynak_oku(path).decode("utf-8-sig"))
         return {k: [temiz_kelime(w) for w in v if temiz_kelime(w)]
                 for k, v in data.items() if isinstance(v, list)}
     except (OSError, json.JSONDecodeError, ValueError) as e:
@@ -165,7 +167,7 @@ def _load_word_categories(path):
 # ——— Es/Zit Anlam verisi (dostca quiz; AI sorar, kullanici cevaplar) ————
 # Kaynak: cocuklar icin 30 es + 30 zit (2026-07-25). Runtime, batch on-uretim ve
 # test modu AYNI sabiti kullanir -> cache anahtarlari birebir eslesir (edge'e dusmez).
-_EA_DEFAULT_PATH = Path(__file__).resolve().parent.parent / "ai" / "es_zit_anlam_cocuklar_30_30.json"
+_EA_DEFAULT_PATH = "ai/es_zit_anlam_cocuklar_30_30.json"
 
 # JSON okunamazsa mod calismaya devam etsin diye kucuk gomulu yedek.
 _EA_FALLBACK = {
@@ -186,7 +188,7 @@ def _load_es_zit(path):
     """es_zit_anlam.json yukle: {kelime: {"es":[...], "zit":[...]}}.
     Hata -> {} (cagiran gomulu yedege duser)."""
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        data = json.loads(paths.kaynak_oku(path).decode("utf-8-sig"))
         out = {}
         for k, v in data.items():
             if not isinstance(v, dict):
@@ -205,8 +207,8 @@ def _load_es_zit(path):
         return {}
 
 
-_ATASOZU_PATH = Path(__file__).resolve().parent.parent / "ai" / "atasozu50.json"
-_DY_PATH = Path(__file__).resolve().parent.parent / "ai" / "dogru_yanlis.json"
+_ATASOZU_PATH = "ai/atasozu50.json"
+_DY_PATH = "ai/dogru_yanlis.json"
 _ATASOZU_FALLBACK = [
     {"bas": "Damlaya damlaya", "tamam": ["göl olur"]},
     {"bas": "Sakla samanı", "tamam": ["gelir zamanı"]},
@@ -226,7 +228,7 @@ _DY_FALLBACK = [
 def _load_json_list(path):
     """JSON dizi dosyasi yukle; hata/uyumsuz -> [] (cagiran gomulu yedege duser)."""
     try:
-        data = json.loads(Path(path).read_text(encoding="utf-8-sig"))
+        data = json.loads(paths.kaynak_oku(path).decode("utf-8-sig"))
         return data if isinstance(data, list) else []
     except (OSError, json.JSONDecodeError, ValueError) as e:
         log.warning("%s okunamadi: %s — gomulu yedek", path, e)
