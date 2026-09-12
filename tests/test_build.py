@@ -99,18 +99,28 @@ def test_standalone_onefile_DEGIL():
 
 @pytest.mark.parametrize("modul", ["lisans", "lisans_bicim", "lisans_durum",
                                    "lisans_ekrani", "parmak_izi", "web_paket",
-                                   "surum", "webview", "cryptography", "web_server"])
+                                   "surum", "cryptography", "web_server"])
 def test_tembel_import_edilen_moduller_acikca_eklenir(modul):
     assert f"--include-module={modul}" in _komut()
 
 
-def test_cryptography_ve_webview_PAKET_olarak_verilmez():
-    """--include-package=webview Nuitka pywebview eklentisiyle catisir
-    (KimyaLab'da olculdu); cryptography icin de tum paket gerekmez, kullanilan
-    alt moduller acikca listelenir."""
+def test_webview_HIC_elle_verilmez():
+    """webview'i elle eklemek Nuitka'nin pywebview eklentisiyle catisir.
+
+    Nuitka 4.2.1 + pywebview 5.4: --include-module=webview de
+    "Conflict between user and plugin decision for module
+    'webview.platforms.android'" ile derlemeyi durdurdu (2026-09-11 G0 spike).
+    Eklenti arka ucu kendi secer; tembel import statik analizde izlenir.
+    """
+    komut = _komut()
+    assert "--include-package=webview" not in komut
+    assert "--include-module=webview" not in komut
+
+
+def test_cryptography_PAKET_olarak_verilmez():
+    """cryptography icin tum paket gerekmez, kullanilan alt moduller acikca."""
     komut = _komut()
     assert "--include-package=cryptography" not in komut
-    assert "--include-package=webview" not in komut
     assert "--include-module=cryptography.hazmat.primitives.ciphers.aead" in komut
     assert "--include-module=cryptography.hazmat.primitives.asymmetric.ed25519" in komut
 

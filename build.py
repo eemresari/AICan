@@ -289,12 +289,15 @@ def komutu_olustur(cikti_dizini=None, konsol: bool = False, ico=None) -> list:
         "--include-module=parmak_izi",
         "--include-module=web_paket",
         "--include-module=surum",
-        # pywebview: lisans_ekrani icinde tembel `import webview`. YALNIZ
-        # --include-module; --include-package=webview VERILMEZ — Nuitka'nin
-        # pywebview eklentisi platform arka ucunu kendisi secer, elle paket
-        # eklemek onunla catisir ("Conflict between user and plugin decision
-        # for module 'webview.platforms.android'", KimyaLab'da olculdu).
-        "--include-module=webview",
+        # pywebview: lisans_ekrani icinde tembel `import webview`. webview
+        # HIC elle verilmez — ne --include-package ne --include-module.
+        # Nuitka'nin pywebview eklentisi platform arka ucunu kendisi secer;
+        # elle eklemek onunla catisir: Nuitka 4.2.1 + pywebview 5.4'te
+        # --include-module=webview de "FATAL: pywebview: Conflict between user
+        # and plugin decision for module 'webview.platforms.android'" verip
+        # derlemeyi 80. saniyede durdurdu (2026-09-11, G0 spike'inda olculdu;
+        # KimyaLab'da ayni catisma --include-package ile gorulmustu).
+        # Tembel import'u Nuitka statik analizde zaten izler.
         # cryptography: lisans_bicim (ed25519) ve web_paket (AESGCM) fonksiyon
         # icinde import eder. Kullanilan alt moduller acikca; tum paket degil
         # (--include-package=cryptography tum arka uclari surukler, gerekmez).

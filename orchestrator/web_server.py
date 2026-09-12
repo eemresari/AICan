@@ -640,6 +640,21 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
                 pitch_enabled=bool(config.get("tts_pitch_enabled", True)),
             )
 
+        def _piper_yedegi(voice_key: str):
+            """Piper YEDEK olarak kurulamazsa None - birincili oldurme.
+
+            Ses dosyasi (.onnx) yoksa PiperEngine kurulusta firlatir. O
+            exception disaridaki try'a dusup cevrimici birincili (edge /
+            elevenlabs) de gomuyordu: G0 build spike'inda EXE'de Piper sesleri
+            yoktu ve tts_engine="edge" olmasina ragmen TTS tamamen olu geldi
+            (2026-09-11). Cevrimdisi yedegin yoklugu sergiyi susturmamali."""
+            try:
+                return _make_piper(voice_key)
+            except Exception as e:  # noqa: BLE001 - yedek opsiyonel
+                log.warning("Cevrimdisi Piper yedegi kurulamadi (%s) - "
+                            "birincil motor yedeksiz devam ediyor.", e)
+                return None
+
         engine_name = config.get("tts_engine", "piper")
         if engine_name == "edge":
             # Birincil: edge-tts (cevrimici). Yedek: Piper (cevrimdisi) — internet
@@ -647,8 +662,10 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
             from tts.engine_edge import EdgeEngine
             from tts.engine_base import FallbackEngine
             primary = EdgeEngine(voice=config.get("tts_voice", DEFAULT_TTS_VOICE))
-            if config.get("tts_fallback_enabled", True):
-                engine = FallbackEngine(primary, _make_piper("tts_fallback_voice"))
+            yedek = (_piper_yedegi("tts_fallback_voice")
+                     if config.get("tts_fallback_enabled", True) else None)
+            if yedek is not None:
+                engine = FallbackEngine(primary, yedek)
                 # Acilis probu: edge erisilemiyorsa motor BASTAN Piper'a sabitlenir.
                 engine = _probe_edge_or_pin_fallback(engine)
                 state.engine = engine
@@ -680,13 +697,16 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
             )
             if config.get("tts_fallback_enabled", True):
                 # 3 katman: elevenlabs -> edge -> piper.
-                offline = FallbackEngine(
-                    EdgeEngine(voice=config.get("tts_elevenlabs_edge_fallback_voice",
-                                                DEFAULT_TTS_VOICE)),
-                    _make_piper("tts_fallback_voice"))
+                edge_yedek = EdgeEngine(
+                    voice=config.get("tts_elevenlabs_edge_fallback_voice",
+                                     DEFAULT_TTS_VOICE))
+                piper_yedek = _piper_yedegi("tts_fallback_voice")
+                offline = (FallbackEngine(edge_yedek, piper_yedek)
+                           if piper_yedek is not None else edge_yedek)
                 state.engine = FallbackEngine(primary, offline)
-                log.info("TTS hazir (elevenlabs=%s + yedek: edge -> piper).",
-                         primary.voice_name)
+                log.info("TTS hazir (elevenlabs=%s + yedek: edge%s).",
+                         primary.voice_name,
+                         " -> piper" if piper_yedek is not None else " (piper YOK)")
             else:
                 state.engine = primary
                 log.info("TTS hazir (elevenlabs=%s, yedek yok).", primary.voice_name)
