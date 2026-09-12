@@ -95,10 +95,10 @@ DIST_KOK_YASAK = ("web", "ai", "main.py")
 # obfuscate etmek kazanc getirmez, kirilma riski getirir).
 OBFUSCATE_DISI = ("vendor",)
 
-# Piper cevrimdisi TTS yedegi: orchestrator/tts/voices/*.onnx .gitignore'da
-# (60 MB, README'deki komutla iner). Varsa dist'e tts/voices olarak girer;
-# yoksa build DURMAZ ama EXE'de piper yedegi calismaz (edge/elevenlabs
-# cevrimici motorlar kalir) — uyari basilir.
+# Piper cevrimdisi TTS yedeginin KAYNAGI: orchestrator/tts/voices/*.onnx
+# (60 MB, depoya girmez; `python -m piper.download_voices tr_TR-dfki-medium
+# --data-dir orchestrator/tts/voices` ile iner). Yoksa build daha on
+# kontrolde durur — gerekce PIPER_HEDEF'te.
 PIPER_SESLER = ORCH / "tts" / "voices"
 
 # CUDA calisma kutuphaneleri (pip nvidia-cublas-cu12, nvidia-cudnn-cu12).
@@ -115,6 +115,12 @@ CUDA_PAKETLERI = ("cublas", "cudnn")
 # icin bu kabul edilemez; internetsiz kurulumda ise hic calismaz.
 # web_server._gomulu_whisper_modeli frozen'da tam o yola bakar.
 WHISPER_HEDEF = "whisper"
+
+# Piper cevrimdisi TTS yedegi: engine_piper `__file__/../voices` okur, yani
+# frozen'da dist/tts/voices/. Birincil motor edge CEVRIMICI calisir; sergi
+# makinesinin agi kesilirse ses tamamen durur, bu yuzden yedek ses pakette
+# ZORUNLU (komutta `--include-data-dir=...=tts/voices` ile giriyor).
+PIPER_HEDEF = "tts/voices"
 
 
 # ---------------------------------------------------------------------------
@@ -369,7 +375,7 @@ def komutu_olustur(cikti_dizini=None, konsol: bool = False, ico=None) -> list:
     # Piper ses modeli (varsa). engine_piper `__file__/../voices` okur; frozen'da
     # bu dist/tts/voices'tir.
     if PIPER_SESLER.is_dir() and any(PIPER_SESLER.glob("*.onnx")):
-        cmd.append(f"--include-data-dir={PIPER_SESLER}=tts/voices")
+        cmd.append(f"--include-data-dir={PIPER_SESLER}={PIPER_HEDEF}")
 
     cmd += [
         f"--output-filename={EXE_ADI}",
@@ -490,6 +496,12 @@ def verify_dist(dist_dir) -> bool:
         print(f"[build] EKSIK (Whisper modeli): {WHISPER_HEDEF}/{boyut}/model.bin"
               " — EXE ilk acilista HF'den indirmeye calisir, sergide mikrofon"
               " dakikalarca olu kalir, internetsizse hic calismaz.")
+        ok = False
+    if not any((dist_dir / PIPER_HEDEF).glob("*.onnx")):
+        print(f"[build] EKSIK (Piper cevrimdisi ses): {PIPER_HEDEF}/*.onnx"
+              " — edge cevrimici motordur, ag kesilince sergi sessiz kalir."
+              " Indir: python -m piper.download_voices tr_TR-dfki-medium"
+              " --data-dir orchestrator/tts/voices")
         ok = False
     for pkg in CUDA_PAKETLERI:
         b = dist_dir / "nvidia" / pkg / "bin"
@@ -627,14 +639,15 @@ def kurucu_uret(dist_dir) -> int:
         print(f"[kurucu] {exe} yok — once `python build.py` calistir.")
         return 1
 
-    # Standalone dist'in TAMAMI kurucuya girer; hassas/ham bir sey sizmis
-    # olmasin. (KimyaLab'daki "yalniz EXE" kuralinin standalone karsiligi.)
-    yasak = dist_yasaklari(dist_dir)
-    if yasak:
-        print("[kurucu] dist'te kurucuya GIRMEMESI gereken dosyalar var:")
-        for rel in yasak:
-            print("         - " + rel)
-        print("         Temizleyip yeniden deneyin (build/ silinip yeniden derlenebilir).")
+    # Kurucu derlemeden BAGIMSIZ calistirilabiliyor (--kurucu), yani elde duran
+    # dist eski/eksik olabilir: 2026-09-12'de Whisper modeli gomulmeden once
+    # alinmis bir dist'ten kurucu uretildi, eksiklik ancak musteride gorunurdu.
+    # verify_dist burada da kapi olur; eksik dosyanin yaninda dist_yasaklari
+    # taramasini da yapar (standalone dist'in TAMAMI kurucuya girdigi icin
+    # KimyaLab'daki "yalniz EXE" kuralinin karsiligi budur).
+    if not verify_dist(dist_dir):
+        print("[kurucu] dist EKSIK/KIRLI — kurucu uretilmedi. Temizleyip "
+              "yeniden derleyin (build/ silinebilir).")
         return 1
 
     iscc = iscc_yolu()
@@ -721,8 +734,13 @@ def main(argv=None) -> int:
               "ya kurun ya --obfuscate-yok verin.")
         return 1
     if not (PIPER_SESLER.is_dir() and any(PIPER_SESLER.glob("*.onnx"))):
-        print(f"[build] UYARI: {PIPER_SESLER} bos — Piper cevrimdisi TTS yedegi "
-              "EXE'ye girmeyecek (edge/elevenlabs cevrimici motorlar kalir).")
+        # verify_dist bunu derlemenin SONUNDA da yakalar; burada durmak 20
+        # dakikalik derlemeyi bosa harcamamak icin.
+        print(f"[build] {PIPER_SESLER} bos — Piper cevrimdisi TTS yedegi "
+              "EXE'ye giremez, ag kesilince sergi sessiz kalir.\n"
+              "        Indir: python -m piper.download_voices tr_TR-dfki-medium"
+              " --data-dir orchestrator/tts/voices")
+        return 1
     if args.check:
         print("[build] On kontroller tamam.")
         return 0

@@ -364,6 +364,9 @@ def _sahte_dist(tmp_path: Path) -> Path:
     gomulu = d / build.WHISPER_HEDEF / build._tohum_whisper_boyutu()
     gomulu.mkdir(parents=True)
     (gomulu / "model.bin").write_bytes(b"ct2")
+    sesler = d / build.PIPER_HEDEF
+    sesler.mkdir(parents=True)
+    (sesler / "tr_TR-dfki-medium.onnx").write_bytes(b"onnx")
     return d
 
 
@@ -371,12 +374,14 @@ def test_verify_dist_tam_paket(tmp_path):
     assert build.verify_dist(_sahte_dist(tmp_path))
 
 
-# Whisper modeli de ZORUNLU: sergide ses TEK giris aygiti, model yoksa EXE
-# ilk acilista HF'den indirmeye calisir (G0 spike: ~12 dk mikrofon olu),
-# internetsizse hic calismaz.
+# Whisper modeli ve Piper sesi de ZORUNLU. Whisper: sergide ses TEK giris
+# aygiti, model yoksa EXE ilk acilista HF'den indirmeye calisir (G0 spike:
+# ~12 dk mikrofon olu), internetsizse hic calismaz. Piper: birincil motor
+# edge CEVRIMICI, yedek ses pakette yoksa ag kesilince sergi sessiz kalir.
 @pytest.mark.parametrize("eksik", [
     "web.pak", "config.json", "Aican.exe",
     f"{build.WHISPER_HEDEF}/{build._tohum_whisper_boyutu()}/model.bin",
+    f"{build.PIPER_HEDEF}/tr_TR-dfki-medium.onnx",
 ])
 def test_verify_dist_eksik_dosya_RED(tmp_path, eksik):
     d = _sahte_dist(tmp_path)

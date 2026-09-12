@@ -111,6 +111,13 @@ def _temiz_dist(tmp_path: Path) -> Path:
     (d / "lisans_web" / "index.html").write_text("x", encoding="utf-8")
     (d / "nvidia" / "cublas" / "bin").mkdir(parents=True)
     (d / "nvidia" / "cublas" / "bin" / "cublas64_12.dll").write_bytes(b"x")
+    (d / "assets" / "emojis").mkdir(parents=True)
+    gomulu = d / build.WHISPER_HEDEF / build._tohum_whisper_boyutu()
+    gomulu.mkdir(parents=True)
+    (gomulu / "model.bin").write_bytes(b"ct2")
+    sesler = d / build.PIPER_HEDEF
+    sesler.mkdir(parents=True)
+    (sesler / "tr_TR-dfki-medium.onnx").write_bytes(b"onnx")
     return d
 
 
@@ -131,6 +138,25 @@ def test_kurucu_uret_ISCC_yi_subprocess_ile_cagirir(tmp_path, monkeypatch):
                         lambda komut, **k: yakalanan.append(komut) or 1)
     assert build.kurucu_uret(d) == 1        # ISCC 1 dondu -> aynen iletilir
     assert yakalanan == [build.kurucu_komutu(Path("ISCC.exe"))]
+
+
+@pytest.mark.parametrize("eksik", [
+    f"{build.WHISPER_HEDEF}/{build._tohum_whisper_boyutu()}/model.bin",
+    "assets/emojis",
+])
+def test_dist_EKSIKSE_kurucu_uretilmez(tmp_path, monkeypatch, eksik):
+    """--kurucu derlemeden bagimsiz calisir: elde duran dist eski olabilir.
+
+    2026-09-12'de tam boyle oldu — Whisper modeli gomulmeden once alinmis bir
+    dist'ten kurucu uretildi; dist_yasaklari temiz oldugu icin hicbir sey
+    uyarmadi, eksiklik ancak musteri makinesinde gorunurdu.
+    """
+    d = _temiz_dist(tmp_path)
+    hedef = d / eksik
+    hedef.rmdir() if hedef.is_dir() else hedef.unlink()
+    monkeypatch.setattr(build, "iscc_yolu",
+                        lambda: pytest.fail("eksik dist'te ISCC cagrilmamali"))
+    assert build.kurucu_uret(d) == 1
 
 
 def test_exe_yoksa_ISCC_aranmaz(tmp_path, monkeypatch):
