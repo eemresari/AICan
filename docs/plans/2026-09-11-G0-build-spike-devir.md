@@ -1,7 +1,7 @@
 # G0 — Build spike devir notu (yeni oturum burada başlar)
 
 ```
-DURUM   : Kod hattı bitti. EXE ÜRETİLDİ (2026-09-11, exit 0). Kalan: elle kabul testi + kurucu.
+DURUM   : Kod hattı bitti. EXE ve KURUCU üretildi (2026-09-12). Kalan: yalnız elle kabul testi.
 HEDEF   : build\run_web.dist\Aican.exe + dist\Aican-Kurulum-0.9.0.{exe,zip,zip.sha256}
 OTURUM  : yeni oturum, ana thread `opus`, bu dosyayla başla. Nuitka logu ağır —
           bağlam 200K'yı geçerse /compact.
@@ -22,9 +22,10 @@ KONUM   : v1-kasa deposu altında `01-Projects/aican` (kendi git deposu, submodu
 | G7 `installer/Aican.iss` + dist taraması + ZIP/SHA-256 | ✅ *yazıldı, testle kilitli* |
 | G8 `docs/KURULUM.md`, `docs/TESLIM.md`, `README.md` | ✅ |
 | Tohum config normalizasyonu (`test_mode:false`, `tts_engine:"edge"`) | ✅ |
-| **G0 — gerçek Nuitka derlemesi** | ✅ 2026-09-11, exit 0, 1117 sn, `build\run_web.dist\Aican.exe` (2.4 GB) |
+| **G0 — gerçek Nuitka derlemesi** | ✅ 2026-09-11 (1117 sn); 2026-09-12'de gömülü model + Piper sesiyle yeniden (429 sn, dist **4,0 GB**) |
+| Whisper CT2 modeli + Piper sesi EXE'ye gömülü | ✅ 2026-09-12 (`verify_dist` ikisini de zorunlu tutuyor) |
 | **G0 — elle kabul testi (mikrofon → Whisper → TTS)** | ❌ **bekliyor, kullanıcı yapacak** |
-| Kurucu (ISCC) üretimi | ❌ EXE olmadan olmaz |
+| Kurucu (ISCC) üretimi | ✅ 2026-09-12 |
 | `git push` (aican + v1-kasa kökü) | ❌ onay bekliyor |
 
 Doğrulama tabanı: `.venv\Scripts\python.exe -m pytest` → **276 passed, 1 failed**.
@@ -107,14 +108,17 @@ Demo anahtarla EXE calistirildi. **Gecen:**
 ile araniyor; spike'ta mikrofon denemeleri model henuz inerken yapildi (hepsi 503),
 model hazir olduktan sonra tekrar denenmedi. **Bir sonraki oturumun ilk isi bu.**
 
-**Whisper modeli EXE'ye GOMULU DEGIL.** `large-v3-turbo` ilk acilista
-HuggingFace'ten indi: 23:02:34 -> 23:14:49, ~12 dakika. O sure boyunca
-`/api/transcribe` 503 doner (hata degil, indirme penceresi). Sergi makinesi
-internetsizse bu bir kurulum sorunu: HF onbellegi (`%USERPROFILE%\.cache\huggingface`)
-elle tasinmali ya da model pakete girmeli. **Karar verilmedi.**
+~~**Whisper modeli EXE'ye GOMULU DEGIL.**~~ **COZULDU (2026-09-12).** Spike'ta
+`large-v3-turbo` ilk acilista HuggingFace'ten indi (23:02:34 -> 23:14:49, ~12 dk;
+o sure boyunca `/api/transcribe` 503) ve internetsiz makinede hic calismazdi.
+Karar: model PAKETE GIRER — `build.whisper_modeli_gom` onu `dist\whisper\<boyut>\`
+altina koyar, `verify_dist` zorunlu tutar, `web_server._gomulu_whisper_modeli`
+frozen'da o yolu kullanir (Whisper yukleme logunda `[gomulu]` yazar).
 
-**Piper sesleri bu build'de yok** (`orchestrator\tts\voices\` bos) - cevrimdisi
-TTS yedegi EXE'ye girmedi, yalniz edge (cevrimici) var.
+~~**Piper sesleri bu build'de yok.**~~ **COZULDU (2026-09-12).** `tr_TR-dfki-medium`
+indirildi (63 MB) ve `dist\tts\voices\` altina girdi; yoksa build artik on
+kontrolde durur. Birincil motor edge CEVRIMICI oldugu icin bu yedek olmadan
+ag kesilince sergi tamamen sessiz kaliyordu.
 
 ### 6. Kurucu
 ```powershell
@@ -131,6 +135,7 @@ aktivasyon yerinde (kaldırma `%LOCALAPPDATA%\Aican`'ı silmez).
 
 | Belirti | Bak |
 |---|---|
+| Scons `Erisim engellendi` / `Failed unexpectedly in Scons C backend` | **Calisan `Aican.exe` cikti dosyasini kilitliyor** (2026-09-12'de oldu, 430 sn bosa gitti). `tasklist \| findstr Aican` → `taskkill /F /IM Aican.exe`, sonra yeniden derle |
 | `No module named web_server` | `derle()` içindeki PYTHONPATH (`orchestrator;kök`) — Nuitka `run_web.py`'nin `sys.path.insert`'ini derleme anında çalıştırmaz |
 | ~~`Conflict between user and plugin decision` (webview)~~ | **ÇIKTI ve çözüldü (2026-09-11).** Nuitka 4.2.1 + pywebview 5.4'te `--include-module=webview` de çatıştı (80. sn, `webview.platforms.android`). `build.py`'den webview satırı tamamen kaldırıldı; eklenti arka ucu kendi seçiyor, tembel import statik analizde izleniyor. `run_web.dist\webview\` üretildi. Test: `test_webview_HIC_elle_verilmez` |
 | İlk transkripsiyonda `cublas64_12.dll not found` | `--include-package-data=nvidia` tutmamış; `dist\build.log`'da "CUDA DLL'i tamamlandi" sayısına bak (`cuda_dll_tamamla` yedeği) |

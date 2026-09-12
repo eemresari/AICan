@@ -26,8 +26,14 @@ cd 01-Projects\aican
   paket yine `web.pak` içinde şifrelenir, yalnız JS okunabilir kalır
   (çözülürse).
 - Inno Setup 6: `winget install JRSoftware.InnoSetup`.
-- Standalone build (Nuitka) ~2 GB, kurucu ZIP ~700 MB civarındadır (CUDA/
-  Whisper kütüphaneleri dahil); derleme birkaç dakika sürebilir.
+- Piper çevrimdışı sesi indirilmiş olmalı — yoksa build ön kontrolde durur:
+  `python -m piper.download_voices tr_TR-dfki-medium --data-dir orchestrator/tts/voices`
+- Whisper CT2 modeli build sırasında `dist/whisper/<boyut>/` altına gömülür
+  (yerel HF önbelleğinden kopyalanır; önbellek boşsa bir kez internetten iner).
+- Boyut (2026-09-12 ölçümü): standalone dist **~4,0 GB**, kurucu EXE ve ZIP
+  **~2,4 GB** (CUDA + Whisper modeli + Piper sesi dahil). Derleme ~7 dakika,
+  kurucunun sıkıştırması ~8 dakika sürer. ZIP, EXE'den neredeyse hiç küçük
+  değildir (içerik zaten sıkışık) — ZIP yalnız tarayıcı/e-posta geçidi için.
 
 1. `python build.py` çıktısında obfuscation ve `web.pak` üretimini gör; ardından
    `build\run_web.dist\` klasörünün oluştuğunu doğrula (`build.verify_dist`
@@ -149,10 +155,11 @@ kaybederse Kayıtlar sekmesinden aynı anahtar yeniden görünür — yenisini �
 - `web.pak` lisanslı kullanıcı tarafından çözülebilir — korunan şey lisansı
   **olmayan** kişinin içeriği görememesi. JS obfuscation ek maliyet, engel
   değil.
-- Sohbet, deneme ya da kalıcı fark etmeksizin **internete** (edge-tts,
-  ilk açılışta Whisper indirmesi) ve kalıcı lisansta ayrıca yerel bir
-  Ollama sürecine bağımlıdır — SprayTarih/KimyaLab'ın aksine Aican
-  tamamen çevrimdışı çalışmaz.
+- Konuşma tanıma ve seslendirme **çevrimdışı çalışır** (Whisper modeli ve
+  Piper sesi pakette gelir); internet yalnız sesli yanıt kalitesini artırır
+  (edge-tts çevrimiçi birincil, kesilince Piper'a düşülür). Kalıcı lisanstaki
+  **sohbet** ise yerel bir Ollama sürecine bağımlıdır — o kurulmamışsa
+  "Şu an düşünemiyorum" yanıtı döner.
 
 ## Depo güvenliği (her teslimden bağımsız)
 

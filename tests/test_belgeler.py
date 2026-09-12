@@ -58,10 +58,25 @@ def test_ollama_pull_satirinda_config_daki_model_adi():
     assert f"ollama pull {model}" in metin
 
 
-def test_dusunemiyorum_ve_whisper_bekleme_metinleri_hata_tablosunda():
+def test_dusunemiyorum_hata_tablosunda():
+    assert "Şu an düşünemiyorum" in _oku(KURULUM_MD)
+
+
+def test_KURULUM_MD_ilk_acilis_INDIRMESI_vaat_etmez():
+    """Whisper modeli ve Piper sesi artik kurucunun icinde geliyor
+    (build.verify_dist ikisini de zorunlu tutuyor), yani musteriye "ilk
+    acilista iner, bekleyin" demek YANLIS. Eski metin oyle diyordu."""
     metin = _oku(KURULUM_MD)
-    assert "Şu an düşünemiyorum" in metin
-    assert "Whisper modeli iniyor" in metin
+    assert "Whisper modeli iniyor" not in metin
+    assert "indirme beklemesi yoktur" in metin
+
+
+def test_KURULUM_MD_internetsiz_calismayi_dogru_anlatir():
+    """Cevrimdisi Piper yedegi pakete girdigi icin internet artik ZORUNLU
+    degil; yalnizca sesli yanit kalitesini etkiliyor."""
+    metin = _oku(KURULUM_MD)
+    assert "tamamen çevrimdışı çalışmaz" not in metin
+    assert "çevrimdışı" in metin
 
 
 def test_gpu_yoksa_bilinmiyor_denir_kesin_iddia_yok():

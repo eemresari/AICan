@@ -8,11 +8,12 @@ Bu belge Aican'ı ilk kez kuran kişi içindir. Teknik bilgi gerektirmez.
 - **NVIDIA ekran kartı.** Konuşmayı yazıya çeviren model (Whisper) GPU'da
   çalışır; gerekli CUDA kütüphaneleri kurulumun içinde gelir, ayrıca bir şey
   kurmanız gerekmez.
-- **İlk açılışta internet bağlantısı.** İki sebepten: (1) konuşma tanıma
-  modeli (Whisper large-v3-turbo, ~1,5 GB) ilk açılışta internetten iner ve
-  diskte kalır; (2) sesli yanıt üretimi (edge-tts) her seferinde internete
-  bağlanır — bu yüzden sergi makinesinin **sürekli** internete çıkabilmesi
-  gerekir, yalnız ilk açılışta değil.
+- **İnternet: gerekli değil, ama önerilir.** Konuşma tanıma modeli
+  (Whisper large-v3-turbo) ve çevrimdışı seslendirme sesi kurulumun içinde
+  gelir; hiçbir şey indirilmez. İnternet varsa sesli yanıtlar daha doğal bir
+  sesle (edge-tts, çevrimiçi) üretilir; internet yoksa ya da kesilirse
+  program kendiliğinden bilgisayardaki çevrimdışı sese düşer ve çalışmaya
+  devam eder.
 - Google Chrome ya da Microsoft Edge (Windows'ta hazır gelir) — sergi iki
   sekmede açılır (sergi ekranı + kontrol paneli).
 
@@ -56,8 +57,10 @@ Kurucu sizi birkaç adımda yönlendirir. Varsayılanları kabul etmeniz yeterli
 - Kurulum yeri: `C:\Program Files\Luden Studio\Aican`
 - Başlat menüsüne kısayol eklenir; isterseniz masaüstüne de.
 
-Kurulum dosyaları büyüktür (konuşma tanıma ve ekran kartı kütüphaneleri
-dahil, ~2 GB); açılması birkaç dakika sürebilir.
+Kurulum dosyaları büyüktür (konuşma tanıma modeli, seslendirme sesi ve ekran
+kartı kütüphaneleri **kurulumun içinde** geldiği için indirilen dosya ~2,4 GB,
+diskte ~4 GB yer kaplar); kurulum birkaç dakika sürebilir. Buna karşılık
+program ilk açılışta hiçbir şey indirmez.
 
 Kurulum bitince Aican'ı Başlat menüsünden **Aican** ile açarsınız.
 
@@ -74,9 +77,8 @@ Anahtar kabul edilirse pencere kapanır ve iki tarayıcı sekmesi açılır (ser
 ekranı ve kontrol paneli). Anahtar bu bilgisayara bağlanır; her açılışta
 yeniden girmeniz **gerekmez**.
 
-İlk açılışta konuşma tanıma modeli henüz diskte yoksa **"Whisper modeli
-iniyor"** benzeri bir bekleme olur (internet hızına göre birkaç dakika). Bu
-işlem yalnızca ilk açılışta olur.
+Açılışta konuşma tanıma modeli belleğe yüklenirken mikrofon birkaç saniye
+yanıt vermez; model kurulumun içinde geldiği için **indirme beklemesi yoktur**.
 
 ### Deneme (demo) anahtar ile kalıcı anahtar arasındaki fark
 
@@ -138,7 +140,8 @@ Lisans penceresi dışındaki durumlar:
 | Ne oluyor | Anlamı | Ne yapmalı |
 |---|---|---|
 | "Şu an düşünemiyorum, birazdan tekrar dener misin?" | Ollama çalışmıyor ya da model henüz `ollama pull` ile inmemiş (yalnız kalıcı anahtarda görülür; demoda sohbet zaten kapalı) | Ollama'nın açık olduğundan ve modelin indiğinden emin olun (yukarıdaki adım) |
-| Açılış uzun sürüyor / "Whisper modeli iniyor" | İlk açılışta konuşma tanıma modeli internetten iniyor | Bekleyin; yalnızca ilk açılışta olur, sonraki açılışlar hızlıdır |
+| Açılışın ilk saniyelerinde mikrofon yanıt vermiyor | Konuşma tanıma modeli belleğe yükleniyor (model kurulumun içinde gelir, indirme yoktur) | Birkaç saniye bekleyin |
+| Ses birden robotik/farklı duyuluyor | İnternet kesilmiş, çevrimdışı seslendirmeye düşülmüş | Sergi çalışmaya devam eder; internet gelince eski sese döner |
 
 **Ekran kartı yoksa ne olur?** Bilinmiyor — bu sürüm yalnız NVIDIA ekran
 kartlı makinede elle test edildi, başka bir donanım varsayımıyla önceden bir
@@ -156,9 +159,11 @@ Küçük değişiklikler (RAM, ekran kartı) sorun çıkarmaz. Anakart veya disk
 değişirse "başka bilgisayara ait" mesajı gelebilir; yeni anahtar isteyin.
 
 **İnternet gerekiyor mu?**
-Evet — hem ilk açılışta (konuşma tanıma modeli iner) hem de her açılışta
-(sesli yanıt üretimi internet üzerinden çalışır). SprayTarih ya da
-KimyaLab'ın aksine Aican tamamen çevrimdışı çalışmaz.
+Hayır, zorunlu değil: konuşma tanıma modeli de çevrimdışı seslendirme sesi de
+kurulumun içinde gelir. İnternet yalnızca sesli yanıt **kalitesini** etkiler
+(çevrimiçi edge-tts daha doğal); bağlantı yoksa program çevrimdışı sese düşer.
+Kalıcı anahtardaki sohbet için ayrıca Ollama'nın kurulu ve çalışıyor olması
+gerekir (o da internetsiz çalışır, yalnız kurulumunda indirme ister).
 
 **Oyun açıldı ama pencere boş / siyah?**
 Chrome veya Edge kurulu olmalı; ikisi de yoksa varsayılan tarayıcı açılır ve

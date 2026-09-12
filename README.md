@@ -435,11 +435,23 @@ CUDA/Whisper native DLL'leri onefile'da tamamlanamadığı için), yani
 `build.kurucu_uret()` ISCC'den **önce** dist'i tarar: `aktivasyon.dat`,
 `*.key`, `lisanslar.json`, `logs/`, `.tarayıcı_profili/`, ham `web/`/`ai/`,
 `main.py` ya da içinde dolu `tts_elevenlabs_api_key` olan `config.json`
-bulursa build **durur** (`tests/test_kurucu.py`).
+bulursa build **durur** (`tests/test_kurucu.py`). `--kurucu` derlemeden
+bağımsız çalıştığı için (elde duran dist eski olabilir) aynı yerde
+`verify_dist()` de koşar: eksik/kirli dist'ten kurucu üretilmez.
+
+**EXE'nin yanında gelenler:** Whisper CT2 modeli (`dist/whisper/<boyut>/`) ve
+Piper çevrimdışı sesi (`dist/tts/voices/*.onnx`) pakete **gömülür**; ikisi de
+yoksa build durur. Gerekçe: model gömülü değilken `faster-whisper` ilk açılışta
+HuggingFace'ten indiriyordu (ölçüldü: ~12 dk, o süre boyunca `/api/transcribe`
+503) ve internetsiz sergide hiç çalışmıyordu; Piper yokken de ağ kesilince
+sergi tamamen sessiz kalıyordu (birincil motor edge çevrimiçidir).
 
 **Tohum config:** `orchestrator/config.json` (sergi makinesinin gerçek ayarları)
 EXE'ye ham girmez; `build.tohum_hazirla()` onu `dist/config.json`'a yazarken
-`test_mode: false` ve `tts_engine: "edge"` zorlar (`build.TOHUM_ZORLA`) — kalıcı
+`test_mode: false`, `tts_engine: "edge"` ve `tts_voice: "tr-TR-EmelNeural"` zorlar
+(`build.TOHUM_ZORLA`; motor ve ses **birlikte** zorlanmalı — geliştirme config'i
+ElevenLabs ses kimliği taşıyor, edge onu ancak ilk sentezde "Invalid voice" diye
+reddediyor, log o ana kadar "TTS hazır" diyor) — kalıcı
 lisanslı müşteri ilk açılışta tam ürünü ve anahtarsız TTS'i görür; demo lisansta
 `test_mode`'u zaten `web_server` zorla açar. Dolu `tts_elevenlabs_api_key` build'i
 durdurur. Depodaki dosya değişmez.

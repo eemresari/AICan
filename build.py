@@ -462,6 +462,9 @@ def whisper_modeli_gom(dist_dir, model_size=None) -> str:
     hedef.mkdir(parents=True, exist_ok=True)
     print(f"[build] Whisper modeli gomuluyor: {boyut} (~1.6 GB, onbellekten)...")
     download_model(boyut, output_dir=str(hedef))
+    # HF indirme defteri (.cache/huggingface/*.metadata) kurucuya girmesin —
+    # musteri makinesinde hicbir ise yaramiyor.
+    shutil.rmtree(hedef / ".cache", ignore_errors=True)
     return str(hedef)
 
 
