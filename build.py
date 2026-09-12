@@ -72,7 +72,13 @@ GIZLI_CONFIG_ALANLARI = ("tts_elevenlabs_api_key",)
 # sergi makinesinin config'i test_mode=true / elevenlabs tasiyabilir; kalici
 # lisansli musteri ilk acilista tam urunu ve anahtarsiz (ucretsiz) TTS'i
 # gormeli. Demo lisansta test_mode'u zaten web_server zorla acar.
-TOHUM_ZORLA = {"test_mode": False, "tts_engine": "edge"}
+# tts_voice de ZORLANIR: gelistirme config'i elevenlabs motoruyla birlikte
+# bir ElevenLabs ses KIMLIGI tasir (or. "01p4omegjS2n3rSDCM5u"). Motoru
+# edge'e cevirip sesi birakmak sergiyi SESSIZ birakiyordu: edge-tts o adi
+# "Invalid voice" diye reddeder, ama hata ancak ILK sentezde cikar — motor
+# kurulurken ad dogrulanmadigi icin log "TTS hazir" der (2026-09-11 G0).
+TOHUM_ZORLA = {"test_mode": False, "tts_engine": "edge",
+               "tts_voice": "tr-TR-EmelNeural"}
 
 # Kurucuya (dist\*) SIZMAMASI gereken adlar. Veri koku frozen'da
 # %LOCALAPPDATA% oldugu icin normalde dist temizdir; bu tarama "biri
@@ -101,6 +107,14 @@ PIPER_SESLER = ORCH / "tts" / "voices"
 # build sonrasi `cuda_dll_tamamla` site-packages'tan dist/nvidia/<pkg>/bin'e
 # kopyalar. web_server._add_cuda_dll_dirs frozen'da tam o yola bakar.
 CUDA_PAKETLERI = ("cublas", "cudnn")
+
+# Whisper CT2 modeli EXE'nin yanina gomulur: dist/whisper/<boyut>/.
+# Gomulmezse faster-whisper ILK acilista HuggingFace'ten indirir — G0
+# spike'inda large-v3-turbo ~12 dakika surdu ve o sure boyunca mikrofon
+# olu kaldi (/api/transcribe 503). Sergide ses TEK giris aygiti oldugu
+# icin bu kabul edilemez; internetsiz kurulumda ise hic calismaz.
+# web_server._gomulu_whisper_modeli frozen'da tam o yola bakar.
+WHISPER_HEDEF = "whisper"
 
 
 # ---------------------------------------------------------------------------
@@ -427,6 +441,33 @@ def cuda_dll_tamamla(dist_dir, site=None) -> int:
     return kopya
 
 
+def whisper_modeli_gom(dist_dir, model_size=None) -> str:
+    """CT2 Whisper modelini dist/whisper/<boyut>/ altina indirir/kopyalar.
+
+    faster_whisper.download_model boyut adini (or. "large-v3-turbo") dogru
+    HF deposuna kendi cevirir ve yerel onbellek doluysa agdan bir sey
+    cekmez. Zaten gomulmusse tekrar kopyalamaz. Hedef yolu doner."""
+    from faster_whisper import download_model
+    boyut = model_size or _tohum_whisper_boyutu()
+    hedef = Path(dist_dir) / WHISPER_HEDEF / boyut
+    if (hedef / "model.bin").is_file():
+        print(f"[build] Whisper modeli zaten gomulu: {boyut}")
+        return str(hedef)
+    hedef.mkdir(parents=True, exist_ok=True)
+    print(f"[build] Whisper modeli gomuluyor: {boyut} (~1.6 GB, onbellekten)...")
+    download_model(boyut, output_dir=str(hedef))
+    return str(hedef)
+
+
+def _tohum_whisper_boyutu() -> str:
+    """Tohum config'deki whisper_model_size (web_server ile ayni varsayilan)."""
+    try:
+        cfg = json.loads(TOHUM_CONFIG.read_text(encoding="utf-8-sig"))
+    except Exception:  # noqa: BLE001 - tohum okunamazsa varsayilana dus
+        return "small"
+    return cfg.get("whisper_model_size", "small")
+
+
 def verify_dist(dist_dir) -> bool:
     """Paket gercekten calisabilir mi ve ham kaynak sizmis mi?"""
     dist_dir = Path(dist_dir)
@@ -443,6 +484,12 @@ def verify_dist(dist_dir) -> bool:
             ok = False
     if not (dist_dir / "assets" / "emojis").is_dir():
         print("[build] EKSIK (emoji gorselleri): assets/emojis")
+        ok = False
+    boyut = _tohum_whisper_boyutu()
+    if not (dist_dir / WHISPER_HEDEF / boyut / "model.bin").is_file():
+        print(f"[build] EKSIK (Whisper modeli): {WHISPER_HEDEF}/{boyut}/model.bin"
+              " — EXE ilk acilista HF'den indirmeye calisir, sergide mikrofon"
+              " dakikalarca olu kalir, internetsizse hic calismaz.")
         ok = False
     for pkg in CUDA_PAKETLERI:
         b = dist_dir / "nvidia" / pkg / "bin"
@@ -700,6 +747,7 @@ def main(argv=None) -> int:
 
     dist = Path(args.out) / DIST_ADI
     print(f"[build] {cuda_dll_tamamla(dist)} CUDA DLL'i tamamlandi.")
+    whisper_modeli_gom(dist)
     if not verify_dist(dist):
         print("\n[build] Paket EKSIK/KIRLI. Dagitmayin.")
         return 1

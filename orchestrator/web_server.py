@@ -334,6 +334,21 @@ class WhisperState:
         return self.model is not None and self.status == "hazir"
 
 
+def _gomulu_whisper_modeli(model_size: str):
+    """Donmus build'e gomulu CT2 model dizini; yoksa None.
+
+    Frozen olmayan (kaynaktan) calistirmada None doner: gelistiricide
+    faster-whisper kendi HF onbellegini kullanir. EXE'de ise model
+    `<resource_root>/whisper/<size>` altinda durur — build.py oraya kopyalar.
+    Gomulu degilse faster-whisper ilk acilista HF'den indirmeye kalkar;
+    sergi makinesinde bu ~12 dakika mikrofonun olu kalmasi demektir
+    (2026-09-11 G0 spike'inda olculdu), internetsizse hic calismaz."""
+    if not paths.FROZEN:
+        return None
+    d = Path(paths.resource_root()) / "whisper" / model_size
+    return str(d) if (d / "model.bin").is_file() else None
+
+
 def _cuda_dll_kokleri() -> list:
     """CUDA DLL'lerinin arandigi `nvidia/` kok dizinleri.
 
@@ -429,8 +444,10 @@ def _load_whisper_async(state: WhisperState, model_size: str,
         attempts.append(("cpu", "int8"))
     for dev, ct in attempts:
         try:
-            log.info("Whisper yukleniyor: %s (%s, %s)", model_size, dev, ct)
-            model = WhisperModel(model_size, device=dev, compute_type=ct)
+            gomulu = _gomulu_whisper_modeli(model_size)
+            log.info("Whisper yukleniyor: %s (%s, %s)%s", model_size, dev, ct,
+                     " [gomulu]" if gomulu else "")
+            model = WhisperModel(gomulu or model_size, device=dev, compute_type=ct)
             # Yukleme yetmez — kucuk gercek transkripsiyonla dogrula (cublas/cudnn
             # eksikligi ancak burada gorunur). Basarisizsa siradaki denemeye gec.
             _whisper_probe(model)

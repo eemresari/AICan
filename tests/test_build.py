@@ -361,6 +361,9 @@ def _sahte_dist(tmp_path: Path) -> Path:
     (d / "Aican.exe").write_bytes(b"MZ")
     (d / "web.pak").write_bytes(b"AIPAK1\n")
     (d / "config.json").write_text('{"tts_elevenlabs_api_key": ""}', encoding="utf-8")
+    gomulu = d / build.WHISPER_HEDEF / build._tohum_whisper_boyutu()
+    gomulu.mkdir(parents=True)
+    (gomulu / "model.bin").write_bytes(b"ct2")
     return d
 
 
@@ -368,7 +371,13 @@ def test_verify_dist_tam_paket(tmp_path):
     assert build.verify_dist(_sahte_dist(tmp_path))
 
 
-@pytest.mark.parametrize("eksik", ["web.pak", "config.json", "Aican.exe"])
+# Whisper modeli de ZORUNLU: sergide ses TEK giris aygiti, model yoksa EXE
+# ilk acilista HF'den indirmeye calisir (G0 spike: ~12 dk mikrofon olu),
+# internetsizse hic calismaz.
+@pytest.mark.parametrize("eksik", [
+    "web.pak", "config.json", "Aican.exe",
+    f"{build.WHISPER_HEDEF}/{build._tohum_whisper_boyutu()}/model.bin",
+])
 def test_verify_dist_eksik_dosya_RED(tmp_path, eksik):
     d = _sahte_dist(tmp_path)
     (d / eksik).unlink()
@@ -438,3 +447,24 @@ def test_cuda_dll_kaynakta_site_packages(monkeypatch):
     kokler = web_server._cuda_dll_kokleri()
     assert Path(sysconfig.get_paths()["purelib"]) / "nvidia" in kokler
     assert all(k.name == "nvidia" for k in kokler)
+
+
+def test_tohum_tts_motoru_ve_sesi_BIRLIKTE_zorlanir():
+    """Motor edge'e cevrilirken ses de gecerli bir edge sesi olmali.
+
+    Gelistirme config'i elevenlabs + ElevenLabs ses kimligi tasir. Yalniz
+    motoru zorlamak edge'e gecersiz bir ses adi birakiyordu; edge-tts
+    "Invalid voice" ile reddedince sergi tamamen sessiz kaliyordu — ustelik
+    ad kurulusta dogrulanmadigi icin log "TTS hazir" diyordu (2026-09-11 G0).
+    """
+    assert build.TOHUM_ZORLA["tts_engine"] == "edge"
+    ses = build.TOHUM_ZORLA["tts_voice"]
+    assert ses.startswith("tr-TR-") and ses.endswith("Neural"), (
+        f"edge sesi 'tr-TR-...Neural' bicimindedir, bulunan: {ses!r}")
+
+
+def test_tohum_whisper_boyutu_config_ten_okunur():
+    """Gomulecek model adi tohum config'den gelir (web_server ile ayni kaynak)."""
+    import json as _json
+    cfg = _json.loads(build.TOHUM_CONFIG.read_text(encoding="utf-8-sig"))
+    assert build._tohum_whisper_boyutu() == cfg["whisper_model_size"]
