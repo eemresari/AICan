@@ -1,3 +1,8 @@
 # Windows batch dosyalari CRLF ister: LF-only .bat + cok baytli karakter,
 # cmd.exe'nin dosyayi bastan sona yanlis ayristirmasina yol acar (kanitlandi).
 *.bat text eol=crlf
+
+# lisans_bicim.py Merkez'deki kaynagin BAYT BAYT kopyasidir (SHA-256 ile
+# denetlenir). autocrlf=true checkout'ta CRLF'e cevirip kopyayi ayrisik
+# gosteriyordu; icerik ayniydi ama muhafiz yanlis alarm veriyordu.
+lisans_bicim.py text eol=lf
