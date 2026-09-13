@@ -448,13 +448,23 @@ sergi tamamen sessiz kalıyordu (birincil motor edge çevrimiçidir).
 
 **Tohum config:** `orchestrator/config.json` (sergi makinesinin gerçek ayarları)
 EXE'ye ham girmez; `build.tohum_hazirla()` onu `dist/config.json`'a yazarken
-`test_mode: false`, `tts_engine: "edge"` ve `tts_voice: "tr-TR-EmelNeural"` zorlar
-(`build.TOHUM_ZORLA`; motor ve ses **birlikte** zorlanmalı — geliştirme config'i
-ElevenLabs ses kimliği taşıyor, edge onu ancak ilk sentezde "Invalid voice" diye
-reddediyor, log o ana kadar "TTS hazır" diyor) — kalıcı
-lisanslı müşteri ilk açılışta tam ürünü ve anahtarsız TTS'i görür; demo lisansta
-`test_mode`'u zaten `web_server` zorla açar. Dolu `tts_elevenlabs_api_key` build'i
-durdurur. Depodaki dosya değişmez.
+VARSAYILAN olarak `test_mode: false`, `tts_engine: "edge"` ve
+`tts_voice: "tr-TR-EmelNeural"` zorlar (`build.TOHUM_ZORLA`; motor ve ses
+**birlikte** zorlanmalı — geliştirme config'i ElevenLabs ses kimliği taşıyor,
+edge onu ancak ilk sentezde "Invalid voice" diye reddediyor, log o ana kadar
+"TTS hazır" diyor) — gelecekte başka bir sergiye/müşteriye giden derlemede
+kalıcı lisanslı müşteri ilk açılışta tam ürünü ve anahtarsız TTS'i görür; demo
+lisansta `test_mode`'u zaten `web_server` zorla açar. Dolu
+`tts_elevenlabs_api_key` build'i durdurur. Depodaki dosya değişmez.
+
+**`--kendi-ses`:** Konya Bilim Merkezi'ndeki KENDİ sergi makinemizin derlemesi
+bu zorlamayı YEMEMELİ — `orchestrator/tts/cache/`'teki ~6500 parçalık önceden
+üretilmiş ElevenLabs sesi, önbellek anahtarına giren `tts_voice` (voice_id)
+`edge`'e zorlanınca tamamen karşılıksız kalır ve makineye elle girilen
+`ELEVENLABS_API_KEY`'in hiçbir etkisi kalmaz (2026-09-13'te böyle fark edildi).
+`python build.py --kendi-ses` bu derlemede `tts_engine`/`tts_voice`'u
+zorlamadan dev config'ten olduğu gibi geçirir (`test_mode` yine zorlanır).
+Müşteriye giden derlemede bu bayrak **kullanılmaz**.
 
 Sürüm numarası tek yerde: `surum.py`.
 

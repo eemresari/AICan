@@ -258,6 +258,14 @@ def _stt_is_tts_echo(text: str, echo_text: str) -> bool:
 # ses de edge sesi olmali (eski "tr_TR-dfki-medium" fallback'i Piper ses adiydi).
 DEFAULT_TTS_VOICE = "tr-TR-EmelNeural"
 
+# Gecerli edge-tts ses adi kalibi: "tr-TR-EmelNeural", "en-US-AriaNeural".
+# ElevenLabs voice_id'si (ornegin "01p4omegjS2n3rSDCM5u") bu kalibi TUTMAZ.
+# 2026-09-13: kurulu makinenin config'i tts_engine="edge" + tts_voice=<eleven
+# voice_id> tasiyordu; edge-tts hatayi ancak ilk sentezde verdigi icin acilis
+# probu motoru SESSIZCE kalici Piper'a sabitliyor ve sergi ucretsiz sesle
+# konusuyordu. Kalibi once kontrol edip varsayilana dusmek o tuzagi kapatir.
+EDGE_VOICE_RE = re.compile(r"^[a-z]{2}-[A-Z]{2}-\w+Neural$")
+
 # Acilis edge erisilebilirlik probu: motor yuklendikten sonra BIR KEZ kucuk bir
 # sentez denenir; basarisizsa motor bastan Piper'a sabitlenir (FallbackEngine'in
 # her istekte edge deneyip timeout beklemesi yerine).
@@ -476,13 +484,16 @@ class TTSState:
         return self.engine is not None and self.status == "hazir"
 
 
-def _probe_edge_or_pin_fallback(engine):
+def _probe_edge_or_pin_fallback(engine, logger=None):
     """Edge'in erisilebilirligini BIR KEZ dener (kucuk sentez, sinirli sure).
 
     Basarili -> engine aynen doner (mevcut davranis). Basarisiz/timeout -> yedek
     Piper motoru doner; boylece FallbackEngine her istekte edge'i deneyip timeout
     beklemez. Yalnizca FallbackEngine (edge+piper) icin anlamlidir.
-    """
+
+    `logger` verilirse (SessionLogger) sebep session.log'a da yazilir — bu
+    fonksiyon gecersiz voice_name (ornegin yanlislikla ElevenLabs voice_id'si
+    yazilmis tts_voice) gibi sessiz duşme nedenlerini yakalayan tek yerdir."""
     from tts.engine_base import FallbackEngine
     if not isinstance(engine, FallbackEngine):
         return engine
@@ -498,12 +509,21 @@ def _probe_edge_or_pin_fallback(engine):
     t.start()
     t.join(EDGE_PROBE_TIMEOUT_S)
     if t.is_alive():
-        log.warning("TTS edge probu %.0fs icinde donmedi — motor Piper'a sabitlendi.",
-                    EDGE_PROBE_TIMEOUT_S)
+        msg = (f"TTS edge probu {EDGE_PROBE_TIMEOUT_S:.0f}s icinde donmedi — "
+               "motor Piper'a sabitlendi.")
+        log.warning(msg)
+        if logger is not None:
+            logger.log_event(msg)
         return engine.fallback
     if result.get("error") is not None or not result.get("audio"):
-        log.warning("TTS edge probu basarisiz (%s) — motor Piper'a sabitlendi.",
-                    result.get("error", "bos ses"))
+        sebep = result.get("error", "bos ses")
+        msg = (f"TTS edge probu basarisiz (sebep: {sebep}; voice='{engine.primary.voice_name}') "
+               "— motor Piper'a sabitlendi. Ipucu: tts_voice edge icin gecerli "
+               "bir edge-tts ses adi olmali (ornegin tr-TR-EmelNeural); "
+               "ElevenLabs voice_id (uzun rastgele harf-rakam dizisi) edge ile calismaz.")
+        log.warning(msg)
+        if logger is not None:
+            logger.log_event(msg)
         return engine.fallback
     log.info("TTS edge probu OK (%d bayt).", len(result["audio"]))
     return engine
@@ -558,10 +578,22 @@ def _tts_synth_cached(state: "TTSState", cache, config: dict, text: str,
             # ElevenLabs anahtari yokken edge) birincil motorun anahtari altina
             # YAZILMAZ — yoksa ucretsiz ses, on-uretilmis ElevenLabs seslerinin
             # yerini kalici alir ve anahtar eklendikten sonra bile calinirdi.
-            src = getattr(state.engine, "last_engine", None)
-            intended = getattr(getattr(state.engine, "primary", state.engine), "name", None)
-            if src is None or intended is None or src == intended:
+            #
+            # Olcut state.engine'in O ANKI hali DEGIL, config'in istedigi motor:
+            # acilis probu edge'i Piper'a sabitlerse state.engine duz PiperEngine
+            # olur, last_engine yoktur ve eski kontrol (src is None -> yaz)
+            # korumayi tamamen kapatirdi. 2026-09-13'te %LOCALAPPDATA%'daki 51
+            # Piper dosyasi (22050 Hz) tam olarak bu delikten girdi.
+            intended = config.get("tts_engine", "piper")
+            if intended not in ("edge", "elevenlabs", "piper"):
+                intended = "piper"       # _load_tts_async bilinmeyen adi piper'a dusurur
+            src = (getattr(state.engine, "last_engine", None)
+                   or getattr(state.engine, "name", None))
+            if src is None or src == intended:
                 cache.put(key, audio)
+            else:
+                log.debug("Onbellege YAZILMADI (istenen motor '%s', ureten '%s').",
+                          intended, src)
     return audio
 
 
@@ -642,11 +674,45 @@ def _warm_tts_cache(state: "TTSState", cache, config: dict) -> None:
     log.info("TTS on-isitma tamam: %d parca onbellekte.", hazir)
 
 
-def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
+def _edge_sesini_dogrula(config: dict, logger=None) -> str:
+    """tts_engine="edge" iken tts_voice gercekten bir edge sesi mi?
+
+    Degilse DEFAULT_TTS_VOICE'a duser ve `config["tts_voice"]`i de BELLEKTE
+    duzeltir. Config'i duzeltmek sart: onbellek anahtari (bkz.
+    `_tts_synth_cached`) sesten turetilir; motor edge sesiyle konusurken
+    anahtarin ElevenLabs voice_id uzayinda kalmasi, ucretsiz sesi onceden
+    uretilmis iyi seslerin anahtarlarina yazmak (= onbellek zehirlenmesi)
+    demektir.
+
+    Sessiz kalmiyoruz: bu hata --noconsole EXE'de baska hicbir yerde
+    gorunmuyor, bu yuzden log.warning + session.log birlikte.
+    """
+    voice = str(config.get("tts_voice", "") or "")
+    if EDGE_VOICE_RE.match(voice):
+        return voice
+    msg = (f"GECERSIZ tts_voice='{voice}' — tts_engine='edge' icin edge-tts ses adi "
+           f"gerekir (ornegin {DEFAULT_TTS_VOICE}); ElevenLabs voice_id burada "
+           f"calismaz. Ses '{DEFAULT_TTS_VOICE}' olarak duzeltildi. Onceden "
+           "uretilmis ElevenLabs onbellegini kullanmak istiyorsaniz config'de "
+           "tts_engine='elevenlabs' olmali.")
+    log.warning(msg)
+    if logger is not None:
+        logger.log_event(msg)
+    config["tts_voice"] = DEFAULT_TTS_VOICE
+    return DEFAULT_TTS_VOICE
+
+
+def _load_tts_async(state: "TTSState", config: dict, cache=None, logger=None) -> None:
     """TTS motorunu arka planda yukler — HTTP yanitlarini geciktirmez.
     use_cuda=False: 4GB VRAM aktif LLM (Ollama) ile dolu; TTS CPU'da kalir
     (Piper RTF ~0.05, gercek-zamandan cok hizli).
-    Yukleme sonrasi (ayni thread): edge erisilebilirlik probu + onbellek on-isitmasi."""
+    Yukleme sonrasi (ayni thread): edge erisilebilirlik probu + onbellek on-isitmasi.
+
+    `logger` verilirse (SessionLogger) secilen motor session.log'a da yazilir:
+    `log.info` yalniz konsola gider ve pencereli (--noconsole) EXE'de konsol
+    olmadigindan GORUNMEZ — ziyaretci "hala ucretsiz sesle konusuyor" dediginde
+    tanilamanin TEK yeri session.log oluyor (bkz. 2026-09-13 TTS motoru geriye
+    dusme arastirmasi)."""
     state.status = "yukleniyor"
     try:
         def _make_piper(voice_key: str):
@@ -678,23 +744,31 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
             # kesilirse sergi susmasin diye FallbackEngine otomatik gecer.
             from tts.engine_edge import EdgeEngine
             from tts.engine_base import FallbackEngine
-            primary = EdgeEngine(voice=config.get("tts_voice", DEFAULT_TTS_VOICE))
+            # Ses adi kalibi ONCE: gecersiz ad edge'de ancak ilk sentezde
+            # patlar, acilis probu da motoru sessizce Piper'a sabitler.
+            primary = EdgeEngine(voice=_edge_sesini_dogrula(config, logger))
             yedek = (_piper_yedegi("tts_fallback_voice")
                      if config.get("tts_fallback_enabled", True) else None)
             if yedek is not None:
                 engine = FallbackEngine(primary, yedek)
                 # Acilis probu: edge erisilemiyorsa motor BASTAN Piper'a sabitlenir.
-                engine = _probe_edge_or_pin_fallback(engine)
+                engine = _probe_edge_or_pin_fallback(engine, logger)
                 state.engine = engine
                 if isinstance(engine, FallbackEngine):
-                    log.info("TTS hazir (edge=%s + cevrimdisi yedek piper=%s).",
-                             primary.voice_name, engine.fallback.voice_name)
+                    msg = (f"TTS hazir (edge={primary.voice_name} + "
+                           f"cevrimdisi yedek piper={engine.fallback.voice_name}).")
                 else:
-                    log.info("TTS hazir (Piper, %s — edge probu basarisiz, motor sabitlendi).",
-                             engine.voice_name)
+                    msg = (f"TTS hazir (Piper, {engine.voice_name} — edge probu "
+                           "basarisiz, motor sabitlendi; UCRETSIZ ses calinacak).")
+                log.info(msg)
+                if logger is not None:
+                    logger.log_event(msg)
             else:
                 state.engine = primary
-                log.info("TTS hazir (edge=%s, yedek yok).", primary.voice_name)
+                msg = f"TTS hazir (edge={primary.voice_name}, yedek yok)."
+                log.info(msg)
+                if logger is not None:
+                    logger.log_event(msg)
         elif engine_name == "elevenlabs":
             # Birincil: ElevenLabs (bulut, KOTALI — her sentez kredi harcar).
             # Yedek zinciri: edge (ucretsiz online) -> Piper (offline). Kredi tavani
@@ -721,22 +795,37 @@ def _load_tts_async(state: "TTSState", config: dict, cache=None) -> None:
                 offline = (FallbackEngine(edge_yedek, piper_yedek)
                            if piper_yedek is not None else edge_yedek)
                 state.engine = FallbackEngine(primary, offline)
-                log.info("TTS hazir (elevenlabs=%s + yedek: edge%s).",
-                         primary.voice_name,
-                         " -> piper" if piper_yedek is not None else " (piper YOK)")
+                msg = (f"TTS hazir (elevenlabs={primary.voice_name} + yedek: edge"
+                       f"{' -> piper' if piper_yedek is not None else ' (piper YOK)'}).")
+                if not getattr(primary, "api_key", None):
+                    msg += (" UYARI: tts_elevenlabs_api_key BOS — her sentez "
+                            "yedege (ucretsiz) dusecek, ElevenLabs hic denenmeyecek.")
+                log.info(msg)
+                if logger is not None:
+                    logger.log_event(msg)
             else:
                 state.engine = primary
-                log.info("TTS hazir (elevenlabs=%s, yedek yok).", primary.voice_name)
+                msg = f"TTS hazir (elevenlabs={primary.voice_name}, yedek yok)."
+                if not getattr(primary, "api_key", None):
+                    msg += " UYARI: tts_elevenlabs_api_key BOS — sentez hep bos donecek."
+                log.info(msg)
+                if logger is not None:
+                    logger.log_event(msg)
         else:
             if engine_name != "piper":
                 log.warning("Bilinmeyen tts_engine '%s' — piper'a dusuluyor.", engine_name)
             state.engine = _make_piper("tts_voice")
-            log.info("TTS hazir (Piper, %s).", state.engine.voice_name)
+            msg = f"TTS hazir (Piper, {state.engine.voice_name}) — UCRETSIZ/cevrimdisi motor."
+            log.info(msg)
+            if logger is not None:
+                logger.log_event(msg)
         state.status = "hazir"
     except Exception as e:  # noqa: BLE001 — TTS yuklenemese de sergi devam etsin
         state.status = "hata"
         state.error = str(e)
         log.warning("TTS yuklenemedi: %s", e)
+        if logger is not None:
+            logger.log_event(f"TTS yuklenemedi: {e}")
         return
     # On-isitma: motor hazir olduktan sonra AYNI arka plan thread'inde —
     # ilk ziyaretci selamlamayi/menu repliklerini sentez beklemeden duysun.
@@ -825,15 +914,19 @@ def create_app(config: dict, paket: dict | None = None, demo: bool = False) -> F
     # TTS motoru arka planda yuklensin — HTTP istekleri bunu beklemez.
     from tts.cache import WavCache
     tts_state = TTSState()
+    # seed_dir: kuruluma gomulmus onceden uretilmis onbellek (EXE yanindaki
+    # tts/cache). Yerinde okunur — %LOCALAPPDATA%'ya kopyalanmaz, eviction
+    # silemez. Kaynaktan calisirken None (yazilabilir dizin zaten onbellek).
     tts_cache = WavCache(
         paths.tts_cache_dir(),
         max_files=int(config.get("tts_cache_max", 500)),
         enabled=bool(config.get("tts_cache_enabled", True)),
+        seed_dir=paths.tts_cache_seed_dir(),
     )
     if config.get("tts_enabled", True):
         threading.Thread(
             target=_load_tts_async,
-            args=(tts_state, config, tts_cache),
+            args=(tts_state, config, tts_cache, logger),
             daemon=True,
         ).start()
 

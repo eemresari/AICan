@@ -146,6 +146,19 @@ def tts_cache_dir() -> str:
     return _veri_yolu("tts_cache")
 
 
+def tts_cache_seed_dir() -> Optional[str]:
+    """Kuruluma gomulmus, SALT OKUNUR ses onbellegi tohumu (EXE yanindaki
+    `tts/cache`, ~900 MB / 6490 onceden uretilmis ElevenLabs parcasi).
+
+    WavCache once yazilabilir dizine, isabet yoksa buraya bakar; buraya HIC
+    yazmaz ve eviction burayi silmez. Kaynaktan calisirken None doner: orada
+    yazilabilir dizin zaten onbellegin kendisidir (orchestrator/tts/cache).
+    """
+    if not FROZEN:
+        return None
+    return os.path.join(resource_root(), "tts", "cache")
+
+
 def browser_profile_dir() -> str:
     """Kiosk tarayicisinin --user-data-dir'i."""
     return _veri_yolu("tarayici_profili")

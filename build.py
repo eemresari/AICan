@@ -6,6 +6,8 @@
     python build.py --obfuscate-yok  # JS obfuscation adimini atla
     python build.py --konsol         # konsol penceresi acik (hata ayiklama)
     python build.py --kurucu         # mevcut dist'ten Inno kurucusu + ZIP + SHA-256
+    python build.py --kendi-ses      # Konya sergi makinemiz: elevenlabs sesi/onbellegi korunur
+                                      # (musteriye giden derlemede KULLANMA)
 
 LISANS HATTI (docs/plans/2026-09-11-lisans-ve-kurucu-entegrasyonu.md, sapma #5/#6)
 ------------------------------------------------------------------------------
@@ -69,16 +71,33 @@ DEPO_KLASORU = ".luden-lisans"
 TOHUM_CONFIG = ORCH / "config.json"
 GIZLI_CONFIG_ALANLARI = ("tts_elevenlabs_api_key",)
 # Dist'e yazilan tohumda ZORLANAN alanlar (kullanici karari 2026-09-11):
-# sergi makinesinin config'i test_mode=true / elevenlabs tasiyabilir; kalici
-# lisansli musteri ilk acilista tam urunu ve anahtarsiz (ucretsiz) TTS'i
-# gormeli. Demo lisansta test_mode'u zaten web_server zorla acar.
+# gelecekte baska bir sergiye/musteriye giden derlemede kalici lisansli
+# musteri ilk acilista tam urunu ve anahtarsiz (ucretsiz) TTS'i gormeli.
+# Demo lisansta test_mode'u zaten web_server zorla acar.
 # tts_voice de ZORLANIR: gelistirme config'i elevenlabs motoruyla birlikte
 # bir ElevenLabs ses KIMLIGI tasir (or. "01p4omegjS2n3rSDCM5u"). Motoru
 # edge'e cevirip sesi birakmak sergiyi SESSIZ birakiyordu: edge-tts o adi
 # "Invalid voice" diye reddeder, ama hata ancak ILK sentezde cikar — motor
 # kurulurken ad dogrulanmadigi icin log "TTS hazir" der (2026-09-11 G0).
+#
+# BU KENDI SERGIMIZ ICIN TUZAK: orchestrator/config.json ayni zamanda
+# Konya Bilim Merkezi'ndeki GERCEK sergi makinesinin ayarlarini tasir
+# (bkz. README "Tohum config") ve orada ElevenLabs'ten onceden uretilmis
+# ~6500 parcalik ozel ses onbellegi var (orchestrator/tts/cache/, voice_id
+# onbellek anahtarina girer). TOHUM_ZORLA korulmadan uygulanirsa bu KENDI
+# derlememizde de motor edge'e duser, onbellek voice_id'si artik hic
+# eslesmez ve API anahtarini %LOCALAPPDATA%\Aican\config.json'a elle
+# girmenin (yukaridaki tohum_config_kontrol notu) hicbir etkisi kalmaz —
+# 2026-09-13'te tam bu sekilde fark edildi ("hala ucretsiz motor calisiyor").
+# Cozum: bu ZORLAMA yalniz VARSAYILAN (musteriye giden) derlemede uygulanir;
+# `build.py --kendi-ses` (ya da tohum_hazirla(kendi_ses=True)) ile KENDI
+# sergimizin derlemesinde atlanir, boylece dev config'teki elevenlabs
+# motoru + doğru voice_id oldugu gibi dist'e gecer.
 TOHUM_ZORLA = {"test_mode": False, "tts_engine": "edge",
                "tts_voice": "tr-TR-EmelNeural"}
+# --kendi-ses ile ATLANAN alt kume: test_mode HER ZAMAN zorlanir (musteri/kendi
+# sergi farketmez, ilk kurulumda test modunda acilmamali), yalniz TTS alanlari atlanir.
+TOHUM_ZORLA_TTS_ANAHTARLARI = ("tts_engine", "tts_voice")
 
 # Kurucuya (dist\*) SIZMAMASI gereken adlar. Veri koku frozen'da
 # %LOCALAPPDATA% oldugu icin normalde dist temizdir; bu tarama "biri
@@ -101,6 +120,13 @@ OBFUSCATE_DISI = ("vendor",)
 # kontrolde durur — gerekce PIPER_HEDEF'te.
 PIPER_SESLER = ORCH / "tts" / "voices"
 
+# Onceden uretilmis ElevenLabs ses onbellegi: orchestrator/tts/cache/*.wav
+# (~6490 parca, ~900 MB, 44100 Hz). SERGININ IYI SESI BUDUR — canli sentez
+# yok, ElevenLabs API anahtari gerekmez. Paketlenmezse kurulu EXE'nin elinde
+# hicbir parca olmaz ve her replik ucretsiz yedege (edge/Piper, 24000/22050 Hz)
+# duser; 2026-09-13'te sergi tam olarak bu yuzden Piper sesiyle konusuyordu.
+TTS_ONBELLEK = ORCH / "tts" / "cache"
+
 # CUDA calisma kutuphaneleri (pip nvidia-cublas-cu12, nvidia-cudnn-cu12).
 # ctranslate2 bunlari GEC yukler (ctypes/LoadLibrary), Nuitka import
 # analizinde gormez. --include-package-data=nvidia denenir; yetmezse
@@ -121,6 +147,21 @@ WHISPER_HEDEF = "whisper"
 # makinesinin agi kesilirse ses tamamen durur, bu yuzden yedek ses pakette
 # ZORUNLU (komutta `--include-data-dir=...=tts/voices` ile giriyor).
 PIPER_HEDEF = "tts/voices"
+
+# Ses onbellegi tohumu: paths.tts_cache_seed_dir() frozen'da resource_root()/
+# tts/cache okur, yani dist/tts/voices'in komsusu. WavCache buradan YERINDE
+# okur (kopyalama yok, eviction dokunamaz).
+TTS_ONBELLEK_HEDEF = "tts/cache"
+
+# Piper'in espeak-ng fonem verisi: piper paketinin İÇİNDE durur
+# (site-packages/piper/espeak-ng-data, ~18 MB). Nuitka --include-package
+# yalnız .py/.pyd kopyalar; bu veri --include-package-data=piper ile ayrıca
+# istenir (komutu_olustur). Yoksa espeakbridge (C uzantısı) ilk Piper
+# sentezinde "...phontab: No such file" basıp SÜRECİ SESSİZCE SONLANDIRIR —
+# espeak-ng C tarafında exit() çağırıyor, Python bunu exception olarak
+# YAKALAYAMAZ (2026-09-12 tespit edildi: konsol log akıyor, hiçbir pencere
+# açılmadan EXE ölüyor). verify_dist bunu da zorunlu tutar.
+ESPEAK_NG_VERI_HEDEF = "piper/espeak-ng-data"
 
 
 # ---------------------------------------------------------------------------
@@ -174,16 +215,27 @@ def tohum_config_kontrol(yol: Path = TOHUM_CONFIG) -> dict:
     return cfg
 
 
-def tohum_hazirla(kaynak: Path = TOHUM_CONFIG, hedef: Path = None) -> Path:
+def tohum_hazirla(kaynak: Path = TOHUM_CONFIG, hedef: Path = None,
+                  kendi_ses: bool = False) -> Path:
     """orchestrator/config.json -> dist/config.json: gizli alan kontrolu +
-    TOHUM_ZORLA. Kaynak dosyaya dokunmaz; yazilan yolu doner."""
+    TOHUM_ZORLA. Kaynak dosyaya dokunmaz; yazilan yolu doner.
+
+    kendi_ses=True: TOHUM_ZORLA_TTS_ANAHTARLARI atlanir — dev config'teki
+    tts_engine/tts_voice (ornegin "elevenlabs" + gercek voice_id) oldugu
+    gibi gecer. Konya sergi makinesinin KENDI derlemesi icin (musteriye
+    giden derlemede KULLANMA — bkz. TOHUM_ZORLA yorumu)."""
     hedef = Path(hedef) if hedef else KOK / "dist" / "config.json"
     cfg = tohum_config_kontrol(kaynak)
-    cfg.update(TOHUM_ZORLA)
+    zorla = dict(TOHUM_ZORLA)
+    if kendi_ses:
+        for anahtar in TOHUM_ZORLA_TTS_ANAHTARLARI:
+            zorla.pop(anahtar, None)
+    cfg.update(zorla)
     hedef.parent.mkdir(parents=True, exist_ok=True)
     hedef.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n",
                      encoding="utf-8")
-    print(f"[build] tohum config -> {hedef} ({', '.join(f'{k}={v}' for k, v in TOHUM_ZORLA.items())})")
+    print(f"[build] tohum config -> {hedef} ({', '.join(f'{k}={v}' for k, v in zorla.items())}"
+          f"{', kendi-ses: tts alanlari korundu' if kendi_ses else ''})")
     return hedef
 
 
@@ -345,6 +397,17 @@ def komutu_olustur(cikti_dizini=None, konsol: bool = False, ico=None) -> list:
         "--include-package=noisereduce",
         "--include-package=edge_tts",
         "--include-package=piper",
+        # espeak-ng-data (fonem tablolari, ~18 MB): piper/espeak-ng-data/ altinda
+        # PAKET VERISI olarak durur, --include-package Nuitka'da yalniz .py/.pyd
+        # kopyalar. Yoksa espeakbridge (C uzantisi) "Error processing file
+        # '...\\phontab': No such file or directory" basip SURECI SESSIZCE
+        # SONLANDIRIYOR (espeak-ng C tarafinda exit() cagriyor; Python bunu
+        # exception olarak YAKALAYAMAZ). Piper birincil TTS motoru degil
+        # (edge'in yedegi) ama edge probu HANGI SEBEPLE olursa olsun basarisiz
+        # olursa (or. eski config'den kalma gecersiz ElevenLabs ses kimligi)
+        # bu yedege dusuluyor; dusulen ilk sentezde EXE konsol penceresi acik
+        # birakip hicbir pencere acmadan olurdu (2026-09-12 tespit edildi).
+        "--include-package-data=piper",
         "--include-package=flask",
         # --- build DISI (sapma #8): Tkinter prototipi ve gelistirme araclari ---
         # run_web.py -> web_server bunlari import ETMEZ (teyit edildi); yine de
@@ -376,6 +439,11 @@ def komutu_olustur(cikti_dizini=None, konsol: bool = False, ico=None) -> list:
     # bu dist/tts/voices'tir.
     if PIPER_SESLER.is_dir() and any(PIPER_SESLER.glob("*.onnx")):
         cmd.append(f"--include-data-dir={PIPER_SESLER}={PIPER_HEDEF}")
+
+    # Onceden uretilmis ses onbellegi (varsa). WavCache'in salt okunur tohumu;
+    # bu olmadan kurulu sergi ucretsiz sesle konusur.
+    if TTS_ONBELLEK.is_dir() and any(TTS_ONBELLEK.glob("*.wav")):
+        cmd.append(f"--include-data-dir={TTS_ONBELLEK}={TTS_ONBELLEK_HEDEF}")
 
     cmd += [
         f"--output-filename={EXE_ADI}",
@@ -505,6 +573,18 @@ def verify_dist(dist_dir) -> bool:
               " — edge cevrimici motordur, ag kesilince sergi sessiz kalir."
               " Indir: python -m piper.download_voices tr_TR-dfki-medium"
               " --data-dir orchestrator/tts/voices")
+        ok = False
+    if not any((dist_dir / TTS_ONBELLEK_HEDEF).glob("*.wav")):
+        print(f"[build] EKSIK (onceden uretilmis ses onbellegi): {TTS_ONBELLEK_HEDEF}/*.wav"
+              " — sergi ucretsiz sesle (edge/Piper) konusur; iyi ses yalniz bu"
+              " onbellekte var ve ElevenLabs anahtari olmadan yeniden uretilemez."
+              f" Kaynak: {TTS_ONBELLEK}")
+        ok = False
+    if not any((dist_dir / ESPEAK_NG_VERI_HEDEF).glob("*")):
+        print(f"[build] EKSIK (espeak-ng fonem verisi): {ESPEAK_NG_VERI_HEDEF}/*"
+              " — Piper (edge'in yedegi) ilk sentezde SESSIZCE COKER, sergi"
+              " hicbir pencere acmadan kapanir. Nuitka komutunda"
+              " --include-package-data=piper eksik olabilir.")
         ok = False
     for pkg in CUDA_PAKETLERI:
         b = dist_dir / "nvidia" / pkg / "bin"
@@ -716,6 +796,12 @@ def main(argv=None) -> int:
     parser.add_argument("--kurucu", action="store_true",
                         help="derlemeyi atla; mevcut build/run_web.dist'ten "
                              "Inno Setup kurucusu + ZIP + SHA-256 uret")
+    parser.add_argument("--kendi-ses", action="store_true",
+                        help="musteriye giden derleme DEGIL — Konya sergi makinesinin "
+                             "kendi derlemesi: dev config'teki tts_engine/tts_voice "
+                             "(elevenlabs + gercek voice_id) ZORLANMADAN dist'e gecer, "
+                             "boylece onceden uretilmis ses onbellegi ve el ile girilen "
+                             "ELEVENLABS_API_KEY calisir")
     args = parser.parse_args(argv)
 
     # KONSOL KOD SAYFASI: Turkce Windows'ta stdout cp1254'tur ve Nuitka'nin
@@ -744,6 +830,13 @@ def main(argv=None) -> int:
               "        Indir: python -m piper.download_voices tr_TR-dfki-medium"
               " --data-dir orchestrator/tts/voices")
         return 1
+    if not (TTS_ONBELLEK.is_dir() and any(TTS_ONBELLEK.glob("*.wav"))):
+        # verify_dist bunu derlemenin SONUNDA da yakalar; burada durmak 20
+        # dakikalik derlemeyi bosa harcamamak icin.
+        print(f"[build] {TTS_ONBELLEK} bos — onceden uretilmis ses onbellegi "
+              "EXE'ye giremez, sergi ucretsiz sesle (edge/Piper) konusur.\n"
+              "        Bu onbellek ElevenLabs anahtari olmadan yeniden uretilemez.")
+        return 1
     if args.check:
         print("[build] On kontroller tamam.")
         return 0
@@ -757,7 +850,7 @@ def main(argv=None) -> int:
 
     # Paket ONCE hazirlanmali: komut uretilecek dosyaya isaret ediyor.
     web_hazirla(obfuscate=not args.obfuscate_yok)
-    tohum_hazirla()
+    tohum_hazirla(kendi_ses=args.kendi_ses)
 
     cmd = komutu_olustur(args.out, konsol=args.konsol, ico=_ikon_yolu())
     print("[build] " + " ".join(cmd) + "\n")

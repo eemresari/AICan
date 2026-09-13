@@ -118,6 +118,12 @@ def _temiz_dist(tmp_path: Path) -> Path:
     sesler = d / build.PIPER_HEDEF
     sesler.mkdir(parents=True)
     (sesler / "tr_TR-dfki-medium.onnx").write_bytes(b"onnx")
+    espeak = d / build.ESPEAK_NG_VERI_HEDEF
+    espeak.mkdir(parents=True)
+    (espeak / "phontab").write_bytes(b"fonem")
+    onbellek = d / build.TTS_ONBELLEK_HEDEF
+    onbellek.mkdir(parents=True)
+    (onbellek / "0008ddc05f17d70f497d646dcf7c7c3bbdcbdf5a.wav").write_bytes(b"RIFF")
     return d
 
 
@@ -143,6 +149,7 @@ def test_kurucu_uret_ISCC_yi_subprocess_ile_cagirir(tmp_path, monkeypatch):
 @pytest.mark.parametrize("eksik", [
     f"{build.WHISPER_HEDEF}/{build._tohum_whisper_boyutu()}/model.bin",
     "assets/emojis",
+    f"{build.TTS_ONBELLEK_HEDEF}/0008ddc05f17d70f497d646dcf7c7c3bbdcbdf5a.wav",
 ])
 def test_dist_EKSIKSE_kurucu_uretilmez(tmp_path, monkeypatch, eksik):
     """--kurucu derlemeden bagimsiz calisir: elde duran dist eski olabilir.

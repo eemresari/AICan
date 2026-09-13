@@ -64,6 +64,18 @@ def test_web_pak_lisans_ekrani_assets_tohum_girer():
     assert "orchestrator/config.json" not in tohum[0].replace("\\", "/")
 
 
+@pytest.mark.skipif(
+    not (build.TTS_ONBELLEK.is_dir() and any(build.TTS_ONBELLEK.glob("*.wav"))),
+    reason="onceden uretilmis ses onbellegi bu makinede yok (depoya girmez)")
+def test_ses_onbellegi_veri_olarak_GIRER():
+    """Onceden uretilmis ElevenLabs parcalari EXE'nin yanina gomulmeli —
+    yoksa kurulu sergi ucretsiz sesle (edge/Piper) konusur."""
+    komut = _komut()
+    assert any(p.startswith("--include-data-dir=")
+               and p.replace("\\", "/").endswith("=" + build.TTS_ONBELLEK_HEDEF)
+               for p in komut), komut
+
+
 @pytest.mark.parametrize("yasak", ["main.py", "veri_uretim", "kurulum",
                                    "build_model", "test_runner"])
 def test_gelistirme_dosyalari_veri_olarak_GIRMEZ(yasak):
@@ -125,7 +137,7 @@ def test_cryptography_PAKET_olarak_verilmez():
     assert "--include-module=cryptography.hazmat.primitives.asymmetric.ed25519" in komut
 
 
-@pytest.mark.parametrize("paket", ["faster_whisper", "ctranslate2", "onnxruntime", "nvidia"])
+@pytest.mark.parametrize("paket", ["faster_whisper", "ctranslate2", "onnxruntime", "nvidia", "piper"])
 def test_ses_hatti_paket_verisi_girer(paket):
     assert f"--include-package-data={paket}" in _komut()
 
@@ -367,6 +379,12 @@ def _sahte_dist(tmp_path: Path) -> Path:
     sesler = d / build.PIPER_HEDEF
     sesler.mkdir(parents=True)
     (sesler / "tr_TR-dfki-medium.onnx").write_bytes(b"onnx")
+    espeak = d / build.ESPEAK_NG_VERI_HEDEF
+    espeak.mkdir(parents=True)
+    (espeak / "phontab").write_bytes(b"fonem")
+    onbellek = d / build.TTS_ONBELLEK_HEDEF
+    onbellek.mkdir(parents=True)
+    (onbellek / "0008ddc05f17d70f497d646dcf7c7c3bbdcbdf5a.wav").write_bytes(b"RIFF")
     return d
 
 
@@ -378,10 +396,15 @@ def test_verify_dist_tam_paket(tmp_path):
 # aygiti, model yoksa EXE ilk acilista HF'den indirmeye calisir (G0 spike:
 # ~12 dk mikrofon olu), internetsizse hic calismaz. Piper: birincil motor
 # edge CEVRIMICI, yedek ses pakette yoksa ag kesilince sergi sessiz kalir.
+# Ses onbellegi (tts/cache/*.wav): serginin IYI sesi yalniz orada; paketlenmezse
+# her replik ucretsiz yedege duser ve ElevenLabs anahtari olmadan geri gelmez
+# (2026-09-13: kurulu EXE 6490 parcanin hicbirini tasimiyordu).
 @pytest.mark.parametrize("eksik", [
     "web.pak", "config.json", "Aican.exe",
     f"{build.WHISPER_HEDEF}/{build._tohum_whisper_boyutu()}/model.bin",
     f"{build.PIPER_HEDEF}/tr_TR-dfki-medium.onnx",
+    f"{build.ESPEAK_NG_VERI_HEDEF}/phontab",
+    f"{build.TTS_ONBELLEK_HEDEF}/0008ddc05f17d70f497d646dcf7c7c3bbdcbdf5a.wav",
 ])
 def test_verify_dist_eksik_dosya_RED(tmp_path, eksik):
     d = _sahte_dist(tmp_path)
@@ -466,6 +489,37 @@ def test_tohum_tts_motoru_ve_sesi_BIRLIKTE_zorlanir():
     ses = build.TOHUM_ZORLA["tts_voice"]
     assert ses.startswith("tr-TR-") and ses.endswith("Neural"), (
         f"edge sesi 'tr-TR-...Neural' bicimindedir, bulunan: {ses!r}")
+
+
+def test_tohum_hazirla_kendi_ses_tts_alanlarini_KORUR(tmp_path):
+    """--kendi-ses: Konya sergi makinemizin derlemesi elevenlabs motorunu/voice_id'yi
+    KAYBETMEMELI (2026-09-13: TOHUM_ZORLA onceden gomulu ses onbellegini karsiliksiz
+    birakiyordu). test_mode yine zorlanir; yalniz TTS alanlari korunur."""
+    kaynak = tmp_path / "config.json"
+    kaynak.write_text(json.dumps({
+        "test_mode": True, "tts_engine": "elevenlabs",
+        "tts_voice": "01p4omegjS2n3rSDCM5u", "tts_elevenlabs_api_key": "",
+        "web_port": 1, "ollama_model": "x",
+    }), encoding="utf-8")
+    hedef = tmp_path / "dist" / "config.json"
+    out = build.tohum_hazirla(kaynak, hedef, kendi_ses=True)
+    cfg = json.loads(out.read_text(encoding="utf-8"))
+    assert cfg["test_mode"] is False
+    assert cfg["tts_engine"] == "elevenlabs"
+    assert cfg["tts_voice"] == "01p4omegjS2n3rSDCM5u"
+
+
+def test_tohum_hazirla_kendi_ses_KAPALIYKEN_eskisi_gibi_edge_zorlar(tmp_path):
+    """kendi_ses=False (varsayilan) musteriye giden derlemede davranis DEGISMEZ."""
+    kaynak = tmp_path / "config.json"
+    kaynak.write_text(json.dumps({
+        "test_mode": True, "tts_engine": "elevenlabs",
+        "tts_voice": "01p4omegjS2n3rSDCM5u", "tts_elevenlabs_api_key": "",
+    }), encoding="utf-8")
+    hedef = tmp_path / "dist" / "config.json"
+    cfg = json.loads(build.tohum_hazirla(kaynak, hedef).read_text(encoding="utf-8"))
+    assert cfg["tts_engine"] == "edge"
+    assert cfg["tts_voice"] == "tr-TR-EmelNeural"
 
 
 def test_tohum_whisper_boyutu_config_ten_okunur():

@@ -40,6 +40,11 @@ exit /b 1
 
 :bul_python
 set "PYEXE="
+rem Depodaki .venv HER ZAMAN once: bagimliliklar (flask, faster-whisper, edge-tts)
+rem orada kurulu. Sistem Python'i secilirse run_web.py "No module named flask"
+rem ile aninda oluyordu (2026-09-13).
+if exist "%~dp0.venv\Scripts\python.exe" set "PYEXE=%~dp0.venv\Scripts\python.exe"
+if defined PYEXE goto :eof
 for /f "delims=" %%p in ('py -3 -c "import sys;print(sys.executable)" 2^>nul') do if not defined PYEXE set "PYEXE=%%p"
 if defined PYEXE if not exist "%PYEXE%" set "PYEXE="
 if defined PYEXE goto :eof
