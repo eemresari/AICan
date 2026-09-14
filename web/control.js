@@ -45,6 +45,12 @@
     gameScore: $('#game-score'),
     gameTheme: $('#game-theme'),
     wordTimer: $('#word-timer'),
+    micDeviceSelect: $('#mic-device-select'),
+    calibrateNoiseBtn: $('#calibrate-noise-btn'),
+    applyNoiseBtn: $('#apply-noise-btn'),
+    noiseStatus: $('#noise-status'),
+    ttsEnabledToggle: $('#tts-enabled-toggle'),
+    ttsAutoplayToggle: $('#tts-autoplay-toggle'),
   };
 
   let currentMode = 'desen'; // 'desen' | 'emoji'
@@ -150,6 +156,11 @@
   let recAutoStopTimer = null;
   let whisperReady = false;
   let micEnabled = false;
+
+  // ——— Ses bölümü: mikrofon seçimi + gürültü kalibrasyonu ————————————
+  let selectedMicDeviceId = '';        // /api/config'ten yüklenir, select değişince güncellenir
+  let noiseCalibrating = false;
+  let suggestedNoiseThreshold = null;  // calibrateNoise() ölçünce dolar, Uygula bunu gönderir
 
   let panel;
   let bc;
@@ -566,10 +577,12 @@
   async function ensureMicStream() {
     if (micStream && micStream.active) return micStream;
     try {
-      micStream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
-      });
+      const audioConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true };
+      const wantId = selectedMicDeviceId || (els.micDeviceSelect && els.micDeviceSelect.value);
+      if (wantId) audioConstraints.deviceId = { exact: wantId };
+      micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
       micEnabled = true;
+      populateMicDevices();   // izin verildikten sonra tarayıcı cihaz etiketlerini açar
       return micStream;
     } catch (e) {
       micEnabled = false;
@@ -685,6 +698,131 @@
     }
   }
 
+  // ——— Ses bölümü: mikrofon listesi + değişim ————————————————————
+  async function populateMicDevices() {
+    if (!els.micDeviceSelect || !navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
+    try {
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const inputs = devices.filter((d) => d.kind === 'audioinput');
+      const prevValue = els.micDeviceSelect.value;
+      els.micDeviceSelect.innerHTML = '';
+      inputs.forEach((d, i) => {
+        const opt = document.createElement('option');
+        opt.value = d.deviceId;
+        // izin verilmeden önce tarayıcı gerçek etiketleri gizler ("Mikrofon N" yer tutucu).
+        opt.textContent = d.label || ('Mikrofon ' + (i + 1));
+        els.micDeviceSelect.appendChild(opt);
+      });
+      const want = selectedMicDeviceId || prevValue;
+      if (want) {
+        for (let i = 0; i < els.micDeviceSelect.options.length; i++) {
+          if (els.micDeviceSelect.options[i].value === want) { els.micDeviceSelect.selectedIndex = i; break; }
+        }
+      }
+      if (els.micDeviceSelect.value) selectedMicDeviceId = els.micDeviceSelect.value;
+    } catch (e) {
+      log('sys', 'mikrofon listesi alınamadı: ' + e.message);
+    }
+  }
+
+  async function postSesConfig(body, successMsg) {
+    try {
+      await fetch('/api/config/ses', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      if (successMsg) log('sys', successMsg);
+    } catch (e) {
+      log('sys', 'ses ayarı kaydedilemedi: ' + e.message);
+    }
+  }
+
+  function onMicDeviceChange() {
+    if (!els.micDeviceSelect) return;
+    selectedMicDeviceId = els.micDeviceSelect.value || '';
+    try { localStorage.setItem('aibody.micDeviceId', selectedMicDeviceId); } catch (_) {}
+    // Açık akış varsa kapat — bir sonraki basışta/kalibrasyonda yeni cihazla açılır.
+    if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
+    const label = (els.micDeviceSelect.selectedOptions && els.micDeviceSelect.selectedOptions[0]
+      && els.micDeviceSelect.selectedOptions[0].textContent) || selectedMicDeviceId;
+    postSesConfig({ mic_device_id: selectedMicDeviceId }, 'mikrofon girişi: ' + label);
+  }
+
+  // Ortam gürültüsünü 3 sn ölçüp önerilen RMS eşiğini hesaplar (app.js'teki
+  // viEnable ile aynı AnalyserNode deseni). Sonucu uygulamak ayrı bir tık ister.
+  async function calibrateNoise() {
+    if (noiseCalibrating) return;
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia || !window.AudioContext) {
+      if (els.noiseStatus) els.noiseStatus.textContent = 'tarayıcı desteklemiyor';
+      return;
+    }
+    noiseCalibrating = true;
+    noteActivity();
+    suggestedNoiseThreshold = null;
+    if (els.applyNoiseBtn) els.applyNoiseBtn.disabled = true;
+    const DURATION_MS = 3000;
+    const btn = els.calibrateNoiseBtn;
+    if (btn) btn.disabled = true;
+    let stream = null;
+    let ctx = null;
+    try {
+      const audioConstraints = { channelCount: 1, echoCancellation: true, noiseSuppression: true };
+      const wantId = selectedMicDeviceId || (els.micDeviceSelect && els.micDeviceSelect.value);
+      if (wantId) audioConstraints.deviceId = { exact: wantId };
+      stream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraints });
+      ctx = new (window.AudioContext || window.webkitAudioContext)();
+      const src = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 2048;
+      src.connect(analyser);
+      const buf = new Float32Array(analyser.fftSize);
+      const samples = [];
+      const startedAt = performance.now();
+      await new Promise((resolve) => {
+        const tick = () => {
+          analyser.getFloatTimeDomainData(buf);
+          let sum = 0;
+          for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+          samples.push(Math.sqrt(sum / buf.length));
+          const elapsed = performance.now() - startedAt;
+          if (btn) btn.textContent = 'Ölçülüyor... (' + Math.max(0, Math.ceil((DURATION_MS - elapsed) / 1000)) + 'sn)';
+          if (elapsed >= DURATION_MS) { resolve(); return; }
+          setTimeout(tick, 50);
+        };
+        tick();
+      });
+      const avgRms = samples.reduce((a, b) => a + b, 0) / (samples.length || 1);
+      const suggested = Math.min(0.05, Math.max(0.004, avgRms * 1.6));
+      suggestedNoiseThreshold = suggested;
+      if (els.noiseStatus) {
+        els.noiseStatus.textContent =
+          'Ortam gürültüsü: ' + avgRms.toFixed(4) + ' — önerilen eşik: ' + suggested.toFixed(4);
+      }
+      if (els.applyNoiseBtn) els.applyNoiseBtn.disabled = false;
+      log('sys', 'gürültü kalibrasyonu: ortam=' + avgRms.toFixed(4) + ' önerilen=' + suggested.toFixed(4));
+    } catch (e) {
+      if (els.noiseStatus) els.noiseStatus.textContent = 'ölçüm başarısız: ' + e.message;
+      log('sys', 'gürültü kalibrasyonu hatası: ' + e.message);
+    } finally {
+      if (stream) stream.getTracks().forEach((t) => t.stop());
+      if (ctx) { try { ctx.close(); } catch (_) {} }
+      if (btn) { btn.textContent = 'Gürültüyü Ölç (3 sn)'; btn.disabled = false; }
+      noiseCalibrating = false;
+    }
+  }
+
+  function applyNoiseThreshold() {
+    if (suggestedNoiseThreshold == null) return;
+    noteActivity();
+    const val = suggestedNoiseThreshold;
+    postSesConfig({ voice_input_abs_min_rms: val }, 'gürültü eşiği uygulandı: ' + val.toFixed(4));
+    if (els.noiseStatus) {
+      els.noiseStatus.textContent = 'eşik uygulandı (' + val.toFixed(4) + ') — sergi ekranını yenile';
+    }
+    if (els.applyNoiseBtn) els.applyNoiseBtn.disabled = true;
+  }
+
   async function loadEmojiManifest() {
     try {
       const r = await fetch('/api/emoji_manifest');
@@ -714,8 +852,16 @@
       }
       if (d.max_record_seconds) MAX_RECORD_MS = d.max_record_seconds * 1000;
       if (typeof d.test_mode === 'boolean') applyTestMode(d.test_mode, true);
+      if (typeof d.mic_device_id === 'string' && d.mic_device_id) {
+        selectedMicDeviceId = d.mic_device_id;
+      }
+      if (d.tts) {
+        if (els.ttsEnabledToggle) els.ttsEnabledToggle.checked = d.tts.enabled !== false;
+        if (els.ttsAutoplayToggle) els.ttsAutoplayToggle.checked = d.tts.autoplay !== false;
+      }
       updateCharCount();
     } catch (_) { /* varsayilanlar kalir */ }
+    await populateMicDevices();
     // Demo lisans kilidi: açılışta bir kez (sonra 10 sn'lik senkronda da bakılır).
     try {
       const r = await fetch('/api/test_mode');
@@ -1434,6 +1580,19 @@
     if (els.modeToggle) els.modeToggle.addEventListener('click', toggleMode);
     if (els.immersiveToggle) els.immersiveToggle.addEventListener('click', toggleImmersive);
     if (els.testToggle) els.testToggle.addEventListener('click', toggleTestMode);
+    if (els.micDeviceSelect) els.micDeviceSelect.addEventListener('change', onMicDeviceChange);
+    if (els.calibrateNoiseBtn) els.calibrateNoiseBtn.addEventListener('click', calibrateNoise);
+    if (els.applyNoiseBtn) els.applyNoiseBtn.addEventListener('click', applyNoiseThreshold);
+    if (els.ttsEnabledToggle) els.ttsEnabledToggle.addEventListener('change', () => {
+      noteActivity();
+      postSesConfig({ tts_enabled: els.ttsEnabledToggle.checked },
+        'TTS: ' + (els.ttsEnabledToggle.checked ? 'açık' : 'kapalı'));
+    });
+    if (els.ttsAutoplayToggle) els.ttsAutoplayToggle.addEventListener('change', () => {
+      noteActivity();
+      postSesConfig({ tts_autoplay: els.ttsAutoplayToggle.checked },
+        'otomatik oynat: ' + (els.ttsAutoplayToggle.checked ? 'açık' : 'kapalı'));
+    });
 
     initMic();
 

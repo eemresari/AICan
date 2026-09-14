@@ -57,6 +57,10 @@ orchestrator/tts/voices/*.onnx
 orchestrator/tts/voices/*.onnx.json
 # kalite testi ciktilari
 seslendirme_demo/
+# repo kokunde biriken ses onbellegi (runtime, 900MB+)
+/cache/
+# gecici test klasoru
+.scratch_tts_test/
 
 # Lisans hatti (bkz. docs/plans/2026-09-11-lisans-ve-kurucu-entegrasyonu.md)
 # Sirlar ve makineye bagli dosyalar ASLA depoya girmez; Merkez ~/.luden-lisans/ altinda tutar.

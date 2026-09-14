@@ -1006,6 +1006,12 @@ def create_app(config: dict, paket: dict | None = None, demo: bool = False) -> F
             "max_user_input_chars": int(config.get("max_user_input_chars", 240)),
             "max_record_seconds": int(config.get("max_record_seconds", 30)),
             "test_mode": test_mode["on"],
+            # Kontrol panelindeki "Ses" bolumu: secili mikrofon + TTS ac/kapa.
+            "mic_device_id": config.get("mic_device_id", "") or "",
+            "tts": {
+                "enabled": bool(config.get("tts_enabled", True)),
+                "autoplay": bool(config.get("tts_autoplay", True)),
+            },
             # Sergi ekranindaki surekli sesli giris (VAD) ayarlari. Sergide JS'e
             # dokunmadan config.json'dan ayarlanabilsin diye burada aciga cikarilir.
             "voice_input": {
@@ -1238,6 +1244,51 @@ def create_app(config: dict, paket: dict | None = None, demo: bool = False) -> F
         logger.log_event("Test modu " + ("ACIK (yalniz " + ", ".join(TEST_OYUNLAR) + ")"
                                          if on else "KAPALI"))
         return jsonify({"on": on, "games": list(TEST_OYUNLAR)})
+
+    # ——— Ses ayarlari (kontrol paneli "Ses" bolumu) ——————————————————
+    @app.post("/api/config/ses")
+    def api_config_ses_set():
+        """Mikrofon secimi, gurultu esigi ve TTS ac/kapa — kismi guncelleme:
+        yalniz govdede GERCEKTEN bulunan anahtarlar degisir. Kalicilik deseni
+        /api/test_mode ile ayni (bkz. yukarida): bellek + disk (config.json),
+        disk yazma hatasi 500 uretmez, yalniz loglanir."""
+        payload = request.get_json(silent=True) or {}
+        guncellenen: dict = {}
+        if "mic_device_id" in payload:
+            deger = payload.get("mic_device_id")
+            guncellenen["mic_device_id"] = str(deger).strip() if deger else ""
+        if "voice_input_abs_min_rms" in payload:
+            try:
+                rms = float(payload.get("voice_input_abs_min_rms"))
+            except (TypeError, ValueError):
+                return jsonify({"error": "voice_input_abs_min_rms sayi olmali"}), 400
+            guncellenen["voice_input_abs_min_rms"] = max(0.001, min(0.08, rms))
+        if "tts_enabled" in payload:
+            guncellenen["tts_enabled"] = bool(payload.get("tts_enabled"))
+        if "tts_autoplay" in payload:
+            guncellenen["tts_autoplay"] = bool(payload.get("tts_autoplay"))
+        if not guncellenen:
+            return jsonify({"error": "gecerli alan yok"}), 400
+        config.update(guncellenen)
+        try:
+            disk = load_config()
+        except (OSError, ValueError) as e:
+            log.warning("config.json okunamadi (%s) — bellekteki kopya yazilacak", e)
+            disk = dict(config)
+        disk.update(guncellenen)
+        try:
+            save_config(disk)
+        except OSError as e:
+            log.warning("config.json yazilamadi: %s", e)
+        logger.log_event("Ses ayarlari guncellendi: " + ", ".join(sorted(guncellenen)))
+        return jsonify({
+            "mic_device_id": config.get("mic_device_id", "") or "",
+            "voice_input": {"abs_min_rms": float(config.get("voice_input_abs_min_rms", 0.012))},
+            "tts": {
+                "enabled": bool(config.get("tts_enabled", True)),
+                "autoplay": bool(config.get("tts_autoplay", True)),
+            },
+        })
 
     # ——— Oyun modu (Kelime Türetme; deterministik akis, AI kelimeleri temali havuzdan) ————
     @app.post("/api/game/start")

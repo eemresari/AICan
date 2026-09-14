@@ -698,6 +698,34 @@
           </div>
         </section>
 
+        <section class="panel">
+          <div class="panel-h"><h2>Ses</h2></div>
+          <div class="panel-body">
+            <div class="field-group">
+              <label class="field-label">mikrofon girişi</label>
+              <select id="mic-device-select"></select>
+            </div>
+            <div class="field-group">
+              <label class="field-label">gürültü kalibrasyonu</label>
+              <div class="btn-row">
+                <button class="btn" id="calibrate-noise-btn">Gürültüyü Ölç (3 sn)</button>
+                <button class="btn primary" id="apply-noise-btn" disabled>Uygula</button>
+              </div>
+              <div class="note-line" id="noise-status"></div>
+            </div>
+            <div class="field-group">
+              <label class="field-label">ses ayarları</label>
+              <div class="durum-row"><span class="label">TTS (seslendirme)</span>
+                <label><input type="checkbox" id="tts-enabled-toggle" /></label>
+              </div>
+              <div class="durum-row"><span class="label">Otomatik oynat</span>
+                <label><input type="checkbox" id="tts-autoplay-toggle" /></label>
+              </div>
+              <div class="note-line">değişiklikler için sergi ekranını yenile (F5)</div>
+            </div>
+          </div>
+        </section>
+
       </aside>
 
       <!-- ORTA — Prompt + AI yanıt + jest grid -->

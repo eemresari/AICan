@@ -45,6 +45,7 @@
   "tts_cache_enabled": true,
   "tts_cache_max": 8000,
   "tts_autoplay": true,
+  "mic_device_id": "",
   "tts_elevenlabs_api_key": "",
   "tts_elevenlabs_model": "eleven_flash_v2_5",
   "tts_elevenlabs_language": "tr",

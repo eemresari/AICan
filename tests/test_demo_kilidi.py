@@ -163,3 +163,55 @@ def test_filigran_bos(kur, monkeypatch):
     c, _ = kur(demo=False)
     monkeypatch.setattr(web_server, "FILIGRAN", "")
     assert c.get("/api/filigran").get_json() == {"metin": ""}
+
+
+# --------------------------------------------------------------------------- #
+# /api/config/ses (kontrol paneli "Ses" bolumu)
+# --------------------------------------------------------------------------- #
+
+def test_config_ses_gecerli_degerler_diske_yazilir(kur, tmp_path):
+    c, _ = kur(demo=False)
+    r = c.post("/api/config/ses", json={
+        "mic_device_id": "abc123",
+        "voice_input_abs_min_rms": 0.02,
+        "tts_enabled": False,
+        "tts_autoplay": False,
+    })
+    assert r.status_code == 200
+    d = r.get_json()
+    assert d["mic_device_id"] == "abc123"
+    assert d["voice_input"]["abs_min_rms"] == pytest.approx(0.02)
+    assert d["tts"] == {"enabled": False, "autoplay": False}
+    disk = json.loads((tmp_path / "veri" / "config.json").read_text(encoding="utf-8"))
+    assert disk["mic_device_id"] == "abc123"
+    assert disk["voice_input_abs_min_rms"] == pytest.approx(0.02)
+    assert disk["tts_enabled"] is False
+    assert disk["tts_autoplay"] is False
+    # GET /api/config de guncel degerleri yansitir
+    g = c.get("/api/config").get_json()
+    assert g["mic_device_id"] == "abc123"
+    assert g["tts"] == {"enabled": False, "autoplay": False}
+
+
+def test_config_ses_sinir_disi_rms_clamp_edilir(kur):
+    c, _ = kur(demo=False)
+    r = c.post("/api/config/ses", json={"voice_input_abs_min_rms": 999})
+    assert r.status_code == 200
+    assert r.get_json()["voice_input"]["abs_min_rms"] == pytest.approx(0.08)
+    r2 = c.post("/api/config/ses", json={"voice_input_abs_min_rms": -5})
+    assert r2.get_json()["voice_input"]["abs_min_rms"] == pytest.approx(0.001)
+
+
+def test_config_ses_kismi_guncelleme_diger_alanlara_dokunmaz(kur):
+    c, _ = kur(demo=False)
+    c.post("/api/config/ses", json={"tts_enabled": False})
+    r = c.post("/api/config/ses", json={"mic_device_id": "xyz"})
+    d = r.get_json()
+    assert d["mic_device_id"] == "xyz"
+    assert d["tts"]["enabled"] is False   # onceki degisiklik kalici
+
+
+def test_config_ses_bos_govde_400(kur):
+    c, _ = kur(demo=False)
+    r = c.post("/api/config/ses", json={})
+    assert r.status_code == 400
